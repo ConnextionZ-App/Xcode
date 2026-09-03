@@ -14,6 +14,7 @@ import { activateFollowGraph, useFollow } from "./follow-store";
 import { activateLikeGraph, useLike } from "./like-store";
 import { activateSaveGraph, useSave } from "./save-store";
 import { activateShareGraph, useShare } from "./share-store";
+import { activatePosts } from "./posts-store";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Heart, MessageCircle, Bookmark, Music,
@@ -845,6 +846,7 @@ export default function App() {
   const { items: feedItems, status: feedStatus, error: feedError, loadMore, reachedEnd, reload } = useFeed(feedTab === "following");
 
   useEffect(() => {
+    activatePosts(account?.email ?? null);
     activateFollowGraph(account?.email ?? null);
     activateLikeGraph(account?.email ?? null);
     activateSaveGraph(account?.email ?? null);

@@ -223,16 +223,32 @@ export async function uploadMediaFile(file: Blob, filename: string, kind: "media
   return typeof data?.url === "string" ? new URL(data.url, BACKEND_API_URL).toString() : null;
 }
 
-export async function uploadPostMediaFile(file: Blob, filename: string): Promise<UploadedPostMedia | null> {
-  const data = await uploadFile(file, filename, "media");
-  if (typeof data?.id !== "string" || typeof data.url !== "string" || typeof data.contentType !== "string") {
+export async function uploadPostMediaFile(file: Blob, filename: string, postId: string): Promise<UploadedPostMedia | null> {
+  try {
+    const form = new FormData();
+    form.append("file", file, filename);
+    const accessToken = getAccessToken();
+    const response = await fetch(`${BACKEND_API_URL}/media/posts/${postId}`, {
+      method: "POST",
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+      body: form,
+      credentials: "include",
+    });
+    if (!response.ok) return null;
+    const data = await response.json() as Record<string, unknown>;
+    const contentType = data.contentType ?? data.media_type;
+    if (typeof data.id !== "string" || typeof data.url !== "string" || typeof contentType !== "string") {
+      return null;
+    }
+    return {
+      id: data.id,
+      url: new URL(data.url, BACKEND_API_URL).toString(),
+      contentType,
+    };
+  } catch (error) {
+    console.warn("Post media upload unavailable", error);
     return null;
   }
-  return {
-    id: data.id,
-    url: new URL(data.url, BACKEND_API_URL).toString(),
-    contentType: data.contentType,
-  };
 }
 
 export async function fetchFeedPageFromApi(cursor: string | null, limit = 10, following = false): Promise<{
