@@ -122,7 +122,7 @@ export type GraphQLProfile = {
 };
 
 import { BACKEND_API_URL, GRAPHQL_ENDPOINT } from "./api-config";
-import { type Result } from "./auth-store";
+import { getAccessToken, type Result } from "./auth-store";
 
 
 async function uploadFile(file: Blob, filename: string, kind: "media" | "avatar"): Promise<Record<string, unknown> | null> {
@@ -486,9 +486,13 @@ export async function fetchTrendingSounds(genre?: string): Promise<GraphQLSound[
 async function graphqlRequestResult<T>(query: string, variables?: Record<string, unknown>): Promise<Result<T>> {
   let res: Response;
   try {
+    const accessToken = getAccessToken();
     res = await fetch(GRAPHQL_ENDPOINT, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
       credentials: "include",  // Include cookies for session auth
       body: JSON.stringify({ query, variables }),
     });
