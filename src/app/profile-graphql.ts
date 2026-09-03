@@ -182,7 +182,7 @@ export async function markNotificationReadFromApi(
     markNotificationRead: boolean;
   }>(
     `
-      mutation MarkNotificationRead($id: ID!) {
+      mutation MarkNotificationRead($id: UUID!) {
         markNotificationRead(id: $id)
       }
     `,
@@ -284,7 +284,7 @@ export async function trackPostWatch(
   completed: boolean,
 ): Promise<Result<GraphQLWatchResult>> {
   return graphqlRequestResult<{ trackPostWatch: GraphQLWatchResult }>(`
-    mutation TrackPostWatch($postId: ID!, $watchedSeconds: Float!, $completed: Boolean!) {
+    mutation TrackPostWatch($postId: UUID!, $watchedSeconds: Float!, $completed: Boolean!) {
       trackPostWatch(postId: $postId, watchedSeconds: $watchedSeconds, completed: $completed) {
         views watchedSeconds completed rewatched
       }
@@ -296,7 +296,7 @@ export async function trackPostWatch(
 
 export async function fetchComments(postId: string, limit = 100): Promise<Result<GraphQLComment[]>> {
   const result = await graphqlRequestResult<{ comments: GraphQLComment[] }>(`
-    query Comments($postId: ID!, $limit: Int!) {
+    query Comments($postId: UUID!, $limit: Int!) {
       comments(postId: $postId, limit: $limit) {
         id text likes isLiked canDelete canEdit moderationStatus createdAt
         author { id username displayName avatarUrl avatarColor }
@@ -308,7 +308,7 @@ export async function fetchComments(postId: string, limit = 100): Promise<Result
 
 export async function addComment(postId: string, text: string): Promise<Result<GraphQLComment>> {
   const result = await graphqlRequestResult<{ addComment: GraphQLComment }>(`
-    mutation AddComment($postId: ID!, $text: String!) {
+    mutation AddComment($postId: UUID!, $text: String!) {
       addComment(postId: $postId, text: $text) {
         id text likes isLiked canDelete canEdit moderationStatus createdAt
         author { id username displayName avatarUrl avatarColor }
@@ -320,7 +320,7 @@ export async function addComment(postId: string, text: string): Promise<Result<G
 
 export async function editComment(id: string, text: string): Promise<Result<GraphQLComment>> {
   const result = await graphqlRequestResult<{ editComment: GraphQLComment }>(`
-    mutation EditComment($id: ID!, $text: String!) {
+    mutation EditComment($id: UUID!, $text: String!) {
       editComment(id: $id, text: $text) {
         id text likes isLiked canDelete canEdit moderationStatus createdAt
         author { id username displayName avatarUrl avatarColor }
@@ -332,14 +332,14 @@ export async function editComment(id: string, text: string): Promise<Result<Grap
 
 export async function reportComment(id: string, reason: string): Promise<Result<boolean>> {
   const result = await graphqlRequestResult<{ reportComment: boolean }>(`
-    mutation ReportComment($id: ID!, $reason: String!) { reportComment(id: $id, reason: $reason) }
+    mutation ReportComment($id: UUID!, $reason: String!) { reportComment(id: $id, reason: $reason) }
   `, { id, reason });
   return result.ok ? { ok: true, value: result.value.reportComment } : result;
 }
 
 export async function deleteComment(id: string): Promise<Result<boolean>> {
   const result = await graphqlRequestResult<{ deleteComment: boolean }>(`
-    mutation DeleteComment($id: ID!) { deleteComment(id: $id) }
+    mutation DeleteComment($id: UUID!) { deleteComment(id: $id) }
   `, { id });
   return result.ok ? { ok: true, value: result.value.deleteComment } : result;
 }
@@ -348,14 +348,14 @@ export type GraphQLCommentLikeResult = { liked: boolean; likes: number };
 
 export async function likeComment(id: string): Promise<Result<GraphQLCommentLikeResult>> {
   const result = await graphqlRequestResult<{ likeComment: GraphQLCommentLikeResult }>(`
-    mutation LikeComment($id: ID!) { likeComment(id: $id) { liked likes } }
+    mutation LikeComment($id: UUID!) { likeComment(id: $id) { liked likes } }
   `, { id });
   return result.ok ? { ok: true, value: result.value.likeComment } : result;
 }
 
 export async function unlikeComment(id: string): Promise<Result<GraphQLCommentLikeResult>> {
   const result = await graphqlRequestResult<{ unlikeComment: GraphQLCommentLikeResult }>(`
-    mutation UnlikeComment($id: ID!) { unlikeComment(id: $id) { liked likes } }
+    mutation UnlikeComment($id: UUID!) { unlikeComment(id: $id) { liked likes } }
   `, { id });
   return result.ok ? { ok: true, value: result.value.unlikeComment } : result;
 }
@@ -765,7 +765,7 @@ export type GraphQLLikeResult = {
 
 export async function likePost(id: string): Promise<Result<GraphQLLikeResult>> {
   const result = await graphqlRequestResult<{ likePost: GraphQLLikeResult }>(`
-    mutation LikePost($id: ID!) {
+    mutation LikePost($id: UUID!) {
       likePost(id: $id) { liked likes }
     }
   `, { id });
@@ -774,7 +774,7 @@ export async function likePost(id: string): Promise<Result<GraphQLLikeResult>> {
 
 export async function unlikePost(id: string): Promise<Result<GraphQLLikeResult>> {
   const result = await graphqlRequestResult<{ unlikePost: GraphQLLikeResult }>(`
-    mutation UnlikePost($id: ID!) {
+    mutation UnlikePost($id: UUID!) {
       unlikePost(id: $id) { liked likes }
     }
   `, { id });
@@ -793,7 +793,7 @@ export type GraphQLShareResult = {
 
 export async function sharePost(id: string): Promise<Result<GraphQLShareResult>> {
   const result = await graphqlRequestResult<{ sharePost: GraphQLShareResult }>(`
-    mutation SharePost($id: ID!) {
+    mutation SharePost($id: UUID!) {
       sharePost(id: $id) { shares shared }
     }
   `, { id });
@@ -802,7 +802,7 @@ export async function sharePost(id: string): Promise<Result<GraphQLShareResult>>
 
 export async function savePost(id: string): Promise<Result<GraphQLSaveResult>> {
   const result = await graphqlRequestResult<{ savePost: GraphQLSaveResult }>(`
-    mutation SavePost($id: ID!) {
+    mutation SavePost($id: UUID!) {
       savePost(id: $id) { saved saves }
     }
   `, { id });
@@ -811,7 +811,7 @@ export async function savePost(id: string): Promise<Result<GraphQLSaveResult>> {
 
 export async function unsavePost(id: string): Promise<Result<GraphQLSaveResult>> {
   const result = await graphqlRequestResult<{ unsavePost: GraphQLSaveResult }>(`
-    mutation UnsavePost($id: ID!) {
+    mutation UnsavePost($id: UUID!) {
       unsavePost(id: $id) { saved saves }
     }
   `, { id });
@@ -829,7 +829,7 @@ export async function createPost(input: PostInput): Promise<GraphQLPost | null> 
 
 export async function updatePost(id: string, input: Partial<PostInput>): Promise<GraphQLPost | null> {
   const data = await graphqlRequest<{ updatePost: GraphQLPost }>(`
-    mutation UpdatePost($id: ID!, $input: UpdatePostInput!) {
+    mutation UpdatePost($id: UUID!, $input: UpdatePostInput!) {
       updatePost(id: $id, input: $input) { ${postFields} }
     }
   `, { id, input });
@@ -838,7 +838,7 @@ export async function updatePost(id: string, input: Partial<PostInput>): Promise
 
 export async function deletePost(id: string): Promise<boolean> {
   const data = await graphqlRequest<{ deletePost: boolean }>(`
-    mutation DeletePost($id: ID!) { deletePost(id: $id) }
+    mutation DeletePost($id: UUID!) { deletePost(id: $id) }
   `, { id });
   return data?.deletePost ?? false;
 }
@@ -854,7 +854,7 @@ export async function createPlaylist(input: PlaylistInput): Promise<GraphQLPlayl
 
 export async function updatePlaylist(id: string, input: Partial<PlaylistInput>): Promise<GraphQLPlaylist | null> {
   const data = await graphqlRequest<{ updatePlaylist: GraphQLPlaylist }>(`
-    mutation UpdatePlaylist($id: ID!, $input: UpdatePlaylistInput!) {
+    mutation UpdatePlaylist($id: UUID!, $input: UpdatePlaylistInput!) {
       updatePlaylist(id: $id, input: $input) { ${playlistFields} }
     }
   `, { id, input });
@@ -863,7 +863,7 @@ export async function updatePlaylist(id: string, input: Partial<PlaylistInput>):
 
 export async function deletePlaylist(id: string): Promise<boolean> {
   const data = await graphqlRequest<{ deletePlaylist: boolean }>(`
-    mutation DeletePlaylist($id: ID!) { deletePlaylist(id: $id) }
+    mutation DeletePlaylist($id: UUID!) { deletePlaylist(id: $id) }
   `, { id });
   return data?.deletePlaylist ?? false;
 }
