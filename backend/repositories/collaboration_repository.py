@@ -36,7 +36,7 @@ class CollaborationRepository(BaseRepository[Collaboration]):
         user_id: uuid.UUID,
         status: Optional[CollaborationStatus] = None,
         limit: int = 20,
-        before_id: Optional[uuid.UUID] = None,
+        before: Optional[tuple[datetime, uuid.UUID]] = None,
     ) -> list[Collaboration]:
         """Get collaborations where user is initiator or participant."""
         # Subquery to find collaboration IDs where user is a participant
@@ -52,9 +52,20 @@ class CollaborationRepository(BaseRepository[Collaboration]):
         )
         if status:
             stmt = stmt.where(Collaboration.status == status)
-        if before_id:
-            stmt = stmt.where(Collaboration.id < before_id)
-        stmt = stmt.order_by(Collaboration.created_at.desc()).limit(limit)
+        if before:
+            before_time, before_id = before
+            stmt = stmt.where(
+                or_(
+                    Collaboration.created_at < before_time,
+                    and_(
+                        Collaboration.created_at == before_time,
+                        Collaboration.id < before_id,
+                    ),
+                )
+            )
+        stmt = stmt.order_by(
+            Collaboration.created_at.desc(), Collaboration.id.desc()
+        ).limit(limit)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
@@ -63,7 +74,7 @@ class CollaborationRepository(BaseRepository[Collaboration]):
         tags: Optional[list[str]] = None,
         content_type: Optional[str] = None,
         limit: int = 20,
-        before_id: Optional[uuid.UUID] = None,
+        before: Optional[tuple[datetime, uuid.UUID]] = None,
     ) -> list[Collaboration]:
         """Get public collaboration marketplace listings."""
         stmt = select(Collaboration).where(
@@ -75,9 +86,20 @@ class CollaborationRepository(BaseRepository[Collaboration]):
             # Filter by tags (JSONB contains any of the provided tags)
             for tag in tags:
                 stmt = stmt.where(Collaboration.tags.contains([tag]))
-        if before_id:
-            stmt = stmt.where(Collaboration.id < before_id)
-        stmt = stmt.order_by(Collaboration.created_at.desc()).limit(limit)
+        if before:
+            before_time, before_id = before
+            stmt = stmt.where(
+                or_(
+                    Collaboration.created_at < before_time,
+                    and_(
+                        Collaboration.created_at == before_time,
+                        Collaboration.id < before_id,
+                    ),
+                )
+            )
+        stmt = stmt.order_by(
+            Collaboration.created_at.desc(), Collaboration.id.desc()
+        ).limit(limit)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 

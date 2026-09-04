@@ -219,6 +219,14 @@ def stub_shared_dependencies(monkeypatch):
         "repositories.analytics_repository.AnalyticsRepository.creator_affinity", fake_creator_affinity
     )
 
+    async def fake_viewer_post_history(self, user_id, post_ids):
+        return {}
+
+    monkeypatch.setattr(
+        "repositories.analytics_repository.AnalyticsRepository.viewer_post_history",
+        fake_viewer_post_history,
+    )
+
     async def fake_get_discovery_pool(self, exclude_user_ids=None, since=None, limit=150):
         return []
 
@@ -269,6 +277,18 @@ def stub_creator_affinity(monkeypatch, affinity: dict[uuid.UUID, float]):
 
     monkeypatch.setattr(
         "repositories.analytics_repository.AnalyticsRepository.creator_affinity", fake_creator_affinity
+    )
+
+
+def stub_viewer_history(monkeypatch, history: dict):
+    """Patch AnalyticsRepository.viewer_post_history to return per-post ViewerPostSignals."""
+
+    async def fake_viewer_post_history(self, user_id, post_ids):
+        return {pid: signals for pid, signals in history.items() if pid in set(post_ids)}
+
+    monkeypatch.setattr(
+        "repositories.analytics_repository.AnalyticsRepository.viewer_post_history",
+        fake_viewer_post_history,
     )
 
 
@@ -589,6 +609,83 @@ async def test_for_you_creator_affinity_boosts_ranking(monkeypatch, follow_graph
     page = await _feed(make_ctx(viewer), cursor=None, limit=10, following=False)
 
     assert [item.id for item in page.items][0] == affine_id
+
+
+@pytest.mark.asyncio
+async def test_for_you_demotes_partially_watched_post(monkeypatch, follow_graph):
+    """A post the viewer already partially watched should rank below an
+    otherwise identical unseen post (demoted, not excluded)."""
+    from repositories.feed_ranking import ViewerPostSignals
+
+    viewer = make_user("viewer")
+    creator_a = make_user("creator_a")
+    creator_b = make_user("creator_b")
+    now = datetime.now(timezone.utc)
+    seen_id, unseen_id = _ordered_post_ids(2)
+    seen_post = make_post(creator_a.id, seen_id, created_at=now)
+    unseen_post = make_post(creator_b.id, unseen_id, created_at=now)
+    stub_feed_posts(monkeypatch, [])
+    stub_discovery_pool(monkeypatch, [seen_post, unseen_post])
+    stub_hidden_creators(monkeypatch)
+    stub_viewer_history(monkeypatch, {seen_id: ViewerPostSignals(watched_seconds=12.0)})
+
+    page = await _feed(make_ctx(viewer), cursor=None, limit=10, following=False)
+
+    assert [item.id for item in page.items] == [unseen_id, seen_id]
+
+
+@pytest.mark.asyncio
+async def test_for_you_completed_post_demoted_below_partially_watched(monkeypatch, follow_graph):
+    """Completion is a stronger 'already consumed' signal than a partial
+    watch: unseen > partially watched > completed."""
+    from repositories.feed_ranking import ViewerPostSignals
+
+    viewer = make_user("viewer")
+    creators = [make_user(f"creator_{c}") for c in "abc"]
+    now = datetime.now(timezone.utc)
+    completed_id, partial_id, unseen_id = _ordered_post_ids(3)
+    posts = [
+        make_post(creators[0].id, completed_id, created_at=now),
+        make_post(creators[1].id, partial_id, created_at=now),
+        make_post(creators[2].id, unseen_id, created_at=now),
+    ]
+    stub_feed_posts(monkeypatch, [])
+    stub_discovery_pool(monkeypatch, posts)
+    stub_hidden_creators(monkeypatch)
+    stub_viewer_history(
+        monkeypatch,
+        {
+            completed_id: ViewerPostSignals(watched_seconds=30.0, completed=True),
+            partial_id: ViewerPostSignals(watched_seconds=30.0),
+        },
+    )
+
+    page = await _feed(make_ctx(viewer), cursor=None, limit=10, following=False)
+
+    assert [item.id for item in page.items] == [unseen_id, partial_id, completed_id]
+
+
+@pytest.mark.asyncio
+async def test_for_you_demotes_post_viewer_already_engaged_with(monkeypatch, follow_graph):
+    """A post the viewer already liked/saved/shared should rank below an
+    otherwise identical unengaged post."""
+    from repositories.feed_ranking import ViewerPostSignals
+
+    viewer = make_user("viewer")
+    creator_a = make_user("creator_a")
+    creator_b = make_user("creator_b")
+    now = datetime.now(timezone.utc)
+    engaged_id, fresh_id = _ordered_post_ids(2)
+    engaged_post = make_post(creator_a.id, engaged_id, created_at=now)
+    fresh_post = make_post(creator_b.id, fresh_id, created_at=now)
+    stub_feed_posts(monkeypatch, [])
+    stub_discovery_pool(monkeypatch, [engaged_post, fresh_post])
+    stub_hidden_creators(monkeypatch)
+    stub_viewer_history(monkeypatch, {engaged_id: ViewerPostSignals(engaged=True)})
+
+    page = await _feed(make_ctx(viewer), cursor=None, limit=10, following=False)
+
+    assert [item.id for item in page.items] == [fresh_id, engaged_id]
 
 
 @pytest.mark.asyncio
