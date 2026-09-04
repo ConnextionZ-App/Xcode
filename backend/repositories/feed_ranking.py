@@ -3,9 +3,11 @@
 Pure functions only (no DB access) so the ranking behavior can be unit
 tested and tuned independently of the ``_for_you_feed`` resolver. Inputs are
 values already available from existing denormalized post counters, the
-follow graph, and ``AnalyticsRepository.creator_affinity`` (which itself
+follow graph, ``AnalyticsRepository.creator_affinity`` (which itself
 aggregates likes/saves/shares/watch-time/completion/rewatch/follow signals
-from the unified ``InteractionSignal`` log) — no new signal sources.
+from the unified ``InteractionSignal`` log), and the viewer's own per-post
+watch/engagement history (``AnalyticsRepository.viewer_post_history``) —
+no new signal sources.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from __future__ import annotations
 import math
 import uuid
 from collections import defaultdict, deque
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -38,6 +41,28 @@ FRESHNESS_WEIGHT = 10.0
 FOLLOW_BOOST = 30.0
 AFFINITY_WEIGHT = 6.0
 
+# ── Viewer-history penalties (already-consumed content is demoted, never
+# hard-excluded, so small/cold-start pools still have something to show) ────
+SEEN_PENALTY = 15.0        # any partial view/watch of the post
+COMPLETED_PENALTY = 40.0   # watched to completion (replaces SEEN_PENALTY)
+ENGAGED_PENALTY = 12.0     # viewer already liked/saved/shared the post
+
+
+@dataclass(frozen=True)
+class ViewerPostSignals:
+    """The viewer's own past behavior on a single post, distilled from the
+    unified interaction-signal log (``AnalyticsRepository.viewer_post_history``).
+
+    ``watched_seconds`` is the viewer's single best watch event (repeat
+    ``post_watches`` rows are collapsed upstream — one post contributes at
+    most its best watch to ranking). ``completed`` means any completion
+    signal; ``engaged`` means a net like/save or any share.
+    """
+
+    watched_seconds: float = 0.0
+    completed: bool = False
+    engaged: bool = False
+
 
 def score_post(
     *,
@@ -45,13 +70,16 @@ def score_post(
     now: datetime,
     is_followed: bool,
     creator_affinity: float,
+    viewer_history: ViewerPostSignals | None = None,
 ) -> float:
     """Deterministic relevance score for a single candidate post.
 
     Combines: engagement rate (likes/comments/shares/saves normalized by
-    views), log-scaled reach, freshness decay, a follow-graph boost, and the
+    views), log-scaled reach, freshness decay, a follow-graph boost, the
     viewer's per-creator affinity (derived from their own past
-    likes/saves/shares/watch-time/completion/rewatch/follow signals).
+    likes/saves/shares/watch-time/completion/rewatch/follow signals), and
+    penalties when the viewer has already consumed the post (partial watch,
+    completion, or a prior like/save/share).
     """
     views = max(getattr(post, "view_count", 0) or 0, 0)
     likes = max(getattr(post, "like_count", 0) or 0, 0)
@@ -72,12 +100,22 @@ def score_post(
     age_hours = max((now - created_at).total_seconds() / 3600.0, 0.0)
     freshness = max(0.0, 1.0 - age_hours / (FRESHNESS_WINDOW_DAYS * 24.0))
 
+    history_penalty = 0.0
+    if viewer_history is not None:
+        if viewer_history.completed:
+            history_penalty += COMPLETED_PENALTY
+        elif viewer_history.watched_seconds > 0:
+            history_penalty += SEEN_PENALTY
+        if viewer_history.engaged:
+            history_penalty += ENGAGED_PENALTY
+
     return (
         engagement_rate * ENGAGEMENT_SCORE_WEIGHT
         + math.log1p(views) * REACH_WEIGHT
         + freshness * FRESHNESS_WEIGHT
         + (FOLLOW_BOOST if is_followed else 0.0)
         + math.log1p(max(creator_affinity, 0.0)) * AFFINITY_WEIGHT
+        - history_penalty
     )
 
 

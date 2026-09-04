@@ -1006,6 +1006,7 @@ class UpdateCollaborationInput:
     content_type: Optional[str] = None
     platform: Optional[str] = None
     tags: Optional[List[str]] = None
+    status: Optional[CollaborationStatus] = None
     budget_min: Optional[float] = None
     budget_max: Optional[float] = None
     budget_currency: Optional[str] = None
@@ -1962,7 +1963,7 @@ def _milestone_to_gql(milestone) -> MilestoneType:
         title=milestone.title,
         description=milestone.description,
         status=MilestoneStatus(milestone.status.value) if milestone.status else MilestoneStatus.PENDING,
-        due_date=datetime.fromisoformat(milestone.due_date) if milestone.due_date else None,
+        due_date=datetime.fromisoformat(milestone.due_at) if milestone.due_at else None,
         completed_at=datetime.fromisoformat(milestone.completed_at) if milestone.completed_at else None,
         created_at=milestone.created_at,
         updated_at=milestone.updated_at,
@@ -2036,8 +2037,7 @@ async def _my_collaborations(ctx, status, first, after) -> CollaborationConnecti
     if after:
         try:
             before_time, before_id = after.rsplit("|", 1)
-            datetime.fromisoformat(before_time)
-            before = (before_time, UUID_type(before_id))
+            before = (datetime.fromisoformat(before_time), UUID_type(before_id))
         except (TypeError, ValueError):
             raise ValueError("Invalid cursor")
     
@@ -2057,7 +2057,7 @@ async def _my_collaborations(ctx, status, first, after) -> CollaborationConnecti
     edges = [
         CollaborationEdge(
             node=_collaboration_to_gql(c),
-            cursor=f"{c.last_message_at}|{c.id}",
+            cursor=f"{c.created_at.isoformat()}|{c.id}",
         )
         for c in collabs
     ]
@@ -2301,10 +2301,12 @@ async def _for_you_feed(ctx, user, followed_ids, before_id, limit) -> FeedPageTy
     cold-start fallback for viewers with few/no follows or little history —
     their affinity/follow-boost terms are simply zero, so ranking falls back
     to engagement + freshness). Posts are scored from existing denormalized
-    engagement counters, follow status, and per-creator affinity derived
-    from the unified interaction-signal log (likes/saves/shares/watch-time/
-    completion/rewatch/follows), then lightly diversified by creator so one
-    creator can't dominate a page. See repositories/feed_ranking.py.
+    engagement counters, follow status, per-creator affinity derived from
+    the unified interaction-signal log (likes/saves/shares/watch-time/
+    completion/rewatch/follows), and the viewer's own per-post history
+    (already-watched/completed/engaged posts are demoted, never excluded),
+    then lightly diversified by creator so one creator can't dominate a
+    page. See repositories/feed_ranking.py.
     """
     from datetime import timedelta, timezone
     from repositories.content_repository import PostRepository
@@ -2351,6 +2353,9 @@ async def _for_you_feed(ctx, user, followed_ids, before_id, limit) -> FeedPageTy
     ]
 
     affinity = dict(await AnalyticsRepository(ctx.db).creator_affinity(user.id))
+    viewer_history = await AnalyticsRepository(ctx.db).viewer_post_history(
+        user.id, [post.id for post in visible]
+    )
     now = datetime.now(timezone.utc)
     scored = [
         (
@@ -2360,6 +2365,7 @@ async def _for_you_feed(ctx, user, followed_ids, before_id, limit) -> FeedPageTy
                 now=now,
                 is_followed=post.user_id in followed_creator_ids,
                 creator_affinity=affinity.get(post.user_id, 0.0),
+                viewer_history=viewer_history.get(post.id),
             ),
         )
         for post in visible
@@ -2425,8 +2431,7 @@ async def _user_posts(ctx, user_id, first, after) -> PostConnection:
     if after:
         try:
             before_time, before_id = after.rsplit("|", 1)
-            datetime.fromisoformat(before_time)
-            before = (before_time, UUID_type(before_id))
+            before = (datetime.fromisoformat(before_time), UUID_type(before_id))
         except (TypeError, ValueError):
             raise ValueError("Invalid cursor")
     
@@ -2493,7 +2498,7 @@ async def _collaboration_marketplace(ctx, tags, content_type, first, after) -> C
     edges = [
         CollaborationEdge(
             node=_collaboration_to_gql(c),
-            cursor=f"{c.last_message_at}|{c.id}",
+            cursor=f"{c.created_at.isoformat()}|{c.id}",
         )
         for c in collabs
     ]
@@ -3433,6 +3438,26 @@ async def _update_post(ctx, id, input) -> PostType:
     if post.user_id != user.id and user.role.value not in ("admin",):
         raise PermissionError("Only the post author can update this post")
 
+    if input.status is not None:
+        requested_status = CollaborationStatus(input.status.value)
+        allowed_statuses = {
+            CollaborationStatus.PROPOSED: {CollaborationStatus.CANCELLED},
+            CollaborationStatus.ACCEPTED: {
+                CollaborationStatus.IN_PROGRESS,
+                CollaborationStatus.CANCELLED,
+            },
+            CollaborationStatus.IN_PROGRESS: {
+                CollaborationStatus.COMPLETED,
+                CollaborationStatus.CANCELLED,
+            },
+        }
+        if requested_status not in allowed_statuses.get(collab.status, set()):
+            raise ValueError(
+                "Invalid collaboration status transition: "
+                f"{collab.status.value} -> {requested_status.value}"
+            )
+        collab.status = requested_status
+
     # Apply updates from input
     for field in ("title", "body", "caption", "tags", "sound_track", "scheduled_at"):
         value = getattr(input, field, None)
@@ -3630,6 +3655,7 @@ async def _create_collaboration(ctx, input) -> CollaborationType:
 async def _accept_collaboration(ctx, id) -> CollaborationParticipantType:
     """Accept a collaboration invitation."""
     from repositories.collaboration_repository import CollaborationRepository
+    from app.models.collaboration import CollaborationStatus
 
     user = ctx.require_auth()
     repo = CollaborationRepository(ctx.db)
@@ -3637,10 +3663,20 @@ async def _accept_collaboration(ctx, id) -> CollaborationParticipantType:
     participant = await repo.get_participant(id, user.id)
     if not participant:
         raise ValueError("You are not a participant of this collaboration")
+    if participant.accepted:
+        raise ValueError("Collaboration invitation has already been accepted")
+
+    collab = await repo.get_by_id(id)
+    if not collab:
+        raise ValueError("Collaboration not found")
+    if collab.status != CollaborationStatus.PROPOSED:
+        raise ValueError("Collaboration invitation is no longer pending")
 
     participant.accepted = True
     participant.accepted_at = datetime.now(timezone.utc).isoformat()
     await repo.update_participant(participant)
+    collab.status = CollaborationStatus.ACCEPTED
+    await repo.update(collab)
     await ctx.db.commit()
 
     return _participant_to_gql(participant)
@@ -3649,6 +3685,7 @@ async def _accept_collaboration(ctx, id) -> CollaborationParticipantType:
 async def _decline_collaboration(ctx, id) -> bool:
     """Decline a collaboration invitation."""
     from repositories.collaboration_repository import CollaborationRepository
+    from app.models.collaboration import CollaborationStatus
 
     user = ctx.require_auth()
     repo = CollaborationRepository(ctx.db)
@@ -3656,8 +3693,18 @@ async def _decline_collaboration(ctx, id) -> bool:
     participant = await repo.get_participant(id, user.id)
     if not participant:
         raise ValueError("You are not a participant of this collaboration")
+    if participant.accepted:
+        raise ValueError("An accepted collaboration cannot be declined")
+
+    collab = await repo.get_by_id(id)
+    if not collab:
+        raise ValueError("Collaboration not found")
+    if collab.status != CollaborationStatus.PROPOSED:
+        raise ValueError("Collaboration invitation is no longer pending")
 
     await repo.remove_participant(participant)
+    collab.status = CollaborationStatus.DECLINED
+    await repo.update(collab)
     await ctx.db.commit()
     return True
 
@@ -3720,7 +3767,7 @@ async def _add_milestone(ctx, input) -> MilestoneType:
         title=input.title,
         description=input.description,
         status=MilestoneStatus.PENDING,
-        due_date=input.due_date.isoformat() if input.due_date else None,
+        due_at=input.due_date.isoformat() if input.due_date else None,
     )
     
     await repo.add_milestone(milestone)
@@ -3764,7 +3811,7 @@ async def _update_milestone(ctx, id, input) -> MilestoneType:
     if input.status is not None:
         milestone.status = MilestoneStatus(input.status.value)
     if input.due_date is not None:
-        milestone.due_date = input.due_date.isoformat()
+        milestone.due_at = input.due_date.isoformat()
 
     await repo.update_milestone(milestone)
     await ctx.db.commit()

@@ -9,7 +9,16 @@ from __future__ import annotations
 import enum
 import uuid
 
-from sqlalchemy import Enum, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    Enum,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -106,6 +115,11 @@ class CollaborationParticipant(Base, TimestampMixin):
     """Join table linking users to collaborations with a role."""
 
     __tablename__ = "collaboration_participants"
+    __table_args__ = (
+        UniqueConstraint(
+            "collaboration_id", "user_id", name="uq_collaboration_participant"
+        ),
+    )
 
     collaboration_id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),
@@ -123,7 +137,7 @@ class CollaborationParticipant(Base, TimestampMixin):
     role: Mapped[str] = mapped_column(
         String(64), default="participant", nullable=False
     )  # "initiator", "participant", "sponsor"
-    accepted: Mapped[bool] = mapped_column(default=False, nullable=False)
+    accepted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     accepted_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # Relationships

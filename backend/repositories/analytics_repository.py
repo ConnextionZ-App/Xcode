@@ -100,3 +100,70 @@ class AnalyticsRepository(BaseRepository[InteractionSignal]):
             .limit(limit)
         )
         return [(row[0], float(row[1])) for row in result.all()]
+
+    async def viewer_post_history(
+        self, user_id: uuid.UUID, post_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, "ViewerPostSignals"]:
+        """The viewer's past behavior on a candidate set of posts, for ranking.
+
+        One grouped query over the unified signal log, aggregated in Python
+        into ``ViewerPostSignals`` per post: the single best watch event
+        (repeat ``post_watches`` rows are collapsed so one post contributes
+        at most its max watch to ranking), whether any completion fired, and
+        whether the viewer has a net like/save or any share. Posts with no
+        signals are simply absent from the returned dict.
+        """
+        from repositories.feed_ranking import ViewerPostSignals
+
+        if not post_ids:
+            return {}
+
+        stmt = (
+            select(
+                InteractionSignal.post_id,
+                InteractionSignal.signal_type,
+                func.count().label("cnt"),
+                func.max(InteractionSignal.value).label("max_value"),
+            )
+            .where(InteractionSignal.user_id == user_id)
+            .where(InteractionSignal.post_id.in_(post_ids))
+            .group_by(InteractionSignal.post_id, InteractionSignal.signal_type)
+        )
+        result = await self.db.execute(stmt)
+
+        watched: dict[uuid.UUID, float] = {}
+        completed: set[uuid.UUID] = set()
+        net_likes: dict[uuid.UUID, int] = {}
+        net_saves: dict[uuid.UUID, int] = {}
+        shared: set[uuid.UUID] = set()
+        for post_id, signal_type, cnt, max_value in result.all():
+            if signal_type == SignalType.WATCH_DURATION:
+                watched[post_id] = max(watched.get(post_id, 0.0), float(max_value or 0.0))
+            elif signal_type == SignalType.COMPLETION:
+                completed.add(post_id)
+            elif signal_type == SignalType.LIKE:
+                net_likes[post_id] = net_likes.get(post_id, 0) + cnt
+            elif signal_type == SignalType.UNLIKE:
+                net_likes[post_id] = net_likes.get(post_id, 0) - cnt
+            elif signal_type == SignalType.SAVE:
+                net_saves[post_id] = net_saves.get(post_id, 0) + cnt
+            elif signal_type == SignalType.UNSAVE:
+                net_saves[post_id] = net_saves.get(post_id, 0) - cnt
+            elif signal_type == SignalType.SHARE:
+                shared.add(post_id)
+
+        post_ids_with_signals = (
+            set(watched) | completed | set(net_likes) | set(net_saves) | shared
+        )
+        return {
+            post_id: ViewerPostSignals(
+                watched_seconds=watched.get(post_id, 0.0),
+                completed=post_id in completed,
+                engaged=(
+                    net_likes.get(post_id, 0) > 0
+                    or net_saves.get(post_id, 0) > 0
+                    or post_id in shared
+                ),
+            )
+            for post_id in post_ids_with_signals
+        }
