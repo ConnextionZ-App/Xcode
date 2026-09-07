@@ -172,6 +172,22 @@ def stub_shared_dependencies(monkeypatch):
         fake_get_hidden_creator_ids,
     )
 
+    async def noop_track_impressions(self, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "services.analytics_event_service.AnalyticsEventService.track_impressions_bulk",
+        noop_track_impressions,
+    )
+
+    async def noop_track_event(self, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "services.analytics_event_service.AnalyticsEventService.track_event",
+        noop_track_event,
+    )
+
     async def fake_has_interaction(self, post_id, user_id):
         return False
 

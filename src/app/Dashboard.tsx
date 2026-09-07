@@ -33,6 +33,7 @@ import {
 type Tab = "overview" | "content" | "collabs";
 type Status = "loading" | "ready" | "error";
 type Sort = "recent" | "views" | "likes";
+type Trend = "views" | "engagement" | "followers";
 
 const METRIC_ICON: Record<MetricKey, typeof Eye> = {
   views: Eye,
@@ -170,7 +171,13 @@ function Overview({
 }) {
   const views = data.metrics.find((m) => m.key === "views")!;
   const rest = data.metrics.filter((m) => m.key !== "views");
+  const [trend, setTrend] = useState<Trend>("views");
   const labels = useMemo(() => axisLabels(data.days, data.generatedAt), [data.days, data.generatedAt]);
+  const trendSeries = trend === "views"
+    ? views.series
+    : trend === "followers"
+      ? data.metrics.find((m) => m.key === "followers")!.series
+      : data.metrics.filter((m) => m.key !== "followers").reduce((series, metric) => series.map((value, i) => value + metric.series[i]), Array.from({ length: data.days }, () => 0));
 
   const engagement = rest.filter((m) => m.key !== "followers");
   const engagementTotal = engagement.reduce((n, m) => n + m.value, 0) || 1;
@@ -181,9 +188,17 @@ function Overview({
       <div className="rounded-3xl p-4 mb-4" style={{ background: t.groupBg, border: t.groupBorder }}>
         <div className="flex items-start justify-between mb-1">
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-widest" style={{ color: t.sectionLbl }}>Views</p>
+            <div className="flex gap-2 mb-2">
+              {(["views", "engagement", "followers"] as Trend[]).map((option) => (
+                <button key={option} onClick={() => setTrend(option)} className="px-2.5 py-1 rounded-full text-[11px] font-bold"
+                  style={{ color: trend === option ? ACCENT : t.sub, border: `1px solid ${trend === option ? ACCENT : t.divider}` }}>
+                  {option[0].toUpperCase() + option.slice(1)}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] font-bold uppercase tracking-widest" style={{ color: t.sectionLbl }}>{trend}</p>
             <p className="font-extrabold text-[30px] leading-tight mt-1" style={{ color: t.heading }}>
-              {formatCount(views.value)}
+              {formatCount(trend === "views" ? views.value : trendSeries.reduce((sum, value) => sum + value, 0))}
             </p>
           </div>
           <DeltaPill delta={views.deltaPct} />
@@ -191,12 +206,20 @@ function Overview({
         <p className="text-[12px] mb-3" style={{ color: t.sub }}>
           Last {data.days} days, against the {data.days} before them
         </p>
-        <LineChart series={views.series} labels={labels} t={t} />
+        <LineChart series={trendSeries} labels={labels} t={t} />
       </div>
 
       {/* ── The rest of the counters ── */}
       <div className="grid grid-cols-2 gap-3 mb-4">
         {rest.map((metric) => <MetricCard key={metric.key} metric={metric} t={t} />)}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <QualityCard label="Unique viewers" value={formatCount(data.quality.uniqueViewers)} t={t} />
+        <QualityCard label="Saves" value={formatCount(data.quality.saves)} t={t} />
+        <QualityCard label="Avg watch time" value={data.quality.avgWatchTime == null ? "Unavailable" : `${data.quality.avgWatchTime.toFixed(1)}s`} t={t} />
+        <QualityCard label="Completion rate" value={data.quality.completionRate == null ? "Unavailable" : `${data.quality.completionRate.toFixed(1)}%`} t={t} />
+        <QualityCard label="Engagement rate" value={`${data.quality.engagementRate.toFixed(1)}%`} t={t} />
       </div>
 
       {/* ── Engagement mix ── */}
@@ -254,6 +277,15 @@ function MetricCard({ metric, t }: { metric: Metric; t: ReturnType<typeof useTok
       <p className="font-extrabold text-[20px] leading-tight" style={{ color: t.heading }}>{formatCount(metric.value)}</p>
       <p className="text-[12px] mb-2" style={{ color: t.sub }}>{metric.label}</p>
       <Sparkline series={metric.series} />
+    </div>
+  );
+}
+
+function QualityCard({ label, value, t }: { label: string; value: string; t: ReturnType<typeof useTokens> }) {
+  return (
+    <div className="rounded-2xl p-3.5" style={{ background: t.groupBg, border: t.groupBorder }}>
+      <p className="font-extrabold text-[18px] leading-tight" style={{ color: t.heading }}>{value}</p>
+      <p className="text-[12px] mt-1" style={{ color: t.sub }}>{label}</p>
     </div>
   );
 }

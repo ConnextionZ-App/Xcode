@@ -499,7 +499,7 @@ export async function fetchTrendingSounds(genre?: string): Promise<GraphQLSound[
  * `null`. Callers that need to tell "no more results" apart from "the request
  * failed" (pagination, in particular) should use this over `graphqlRequest`.
  */
-async function graphqlRequestResult<T>(query: string, variables?: Record<string, unknown>): Promise<Result<T>> {
+export async function graphqlRequestResult<T>(query: string, variables?: Record<string, unknown>): Promise<Result<T>> {
   let res: Response;
   try {
     const accessToken = getAccessToken();

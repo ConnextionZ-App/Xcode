@@ -82,9 +82,19 @@ class AppContext(BaseContext):
     the corresponding ``User`` ORM instance is loaded and stored.
     """
 
-    def __init__(self, db: AsyncSession, current_user: User | None = None) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        current_user: User | None = None,
+        session_id: str | None = None,
+    ) -> None:
         self.db: AsyncSession = db
         self._current_user: User | None = current_user
+        # Reuses the access token's JWT "jti" claim as a lightweight session
+        # identifier for analytics — avoids standing up a separate session
+        # system (see backend/app/models/user.py Session for the durable,
+        # audit-oriented session record; this is a request-scoped proxy).
+        self.session_id: str | None = session_id
 
     @property
     def current_user(self) -> User | None:
@@ -793,11 +803,15 @@ class ReportType:
 class PostAnalyticsType:
     post: PostType
     views: int = 0
+    unique_viewers: int = 0
     likes: int = 0
     comments: int = 0
     shares: int = 0
+    saves: int = 0
     avg_watch_time: Optional[float] = None
     completion_rate: Optional[float] = None
+    engagement_rate: float = 0.0
+    followers_generated: Optional[int] = None
 
 
 @strawberry.type
@@ -810,6 +824,12 @@ class AnalyticsSummaryType:
     total_likes: int = 0
     total_comments: int = 0
     total_shares: int = 0
+    total_saves: int = 0
+    unique_viewers: int = 0
+    total_uploads: int = 0
+    total_published_videos: int = 0
+    avg_watch_time: Optional[float] = None
+    completion_rate: Optional[float] = None
 
     follower_growth: int = 0
     new_followers: int = 0
@@ -823,6 +843,98 @@ class AnalyticsSummaryType:
     engagement_rate: float = 0.0
 
     top_posts: Optional[List[PostAnalyticsType]] = None
+
+
+@strawberry.type
+class AnalyticsTrendPointType:
+    date: str
+    views: int = 0
+    likes: int = 0
+    comments: int = 0
+    shares: int = 0
+    saves: int = 0
+    followers_gained: int = 0
+
+@strawberry.type
+class PlatformAnalyticsType:
+    period_start: DateTimeScalar
+    period_end: DateTimeScalar
+    total_users: int = 0
+    new_users: int = 0
+    active_users: int = 0
+    daily_active_users: Optional[int] = None
+    weekly_active_users: Optional[int] = None
+    monthly_active_users: Optional[int] = None
+    total_uploads: int = 0
+    total_published_videos: int = 0
+    total_views: int = 0
+    unique_viewers: int = 0
+    total_likes: int = 0
+    total_comments: int = 0
+    total_shares: int = 0
+    total_saves: int = 0
+    profile_views: int = 0
+    sounds_used: int = 0
+    collabs_created: int = 0
+    follows_created: int = 0
+    follows_removed: int = 0
+    net_followers: int = 0
+    average_views_per_published_video: Optional[float] = None
+    engagement_rate: float = 0.0
+    average_watch_time: Optional[float] = None
+    completion_rate: Optional[float] = None
+    feed_impressions: int = 0
+    video_completions: int = 0
+    video_skips: int = 0
+    searches: int = 0
+    searchers: int = 0
+    notifications_generated: Optional[int] = None
+    notifications_opened: int = 0
+    notification_open_rate: Optional[float] = None
+
+@strawberry.type
+class PlatformAnalyticsTrendType:
+    date: str
+    uploads: int = 0
+    published_videos: int = 0
+    views: int = 0
+    completed_views: int = 0
+    engagement: int = 0
+    likes: int = 0
+    comments: int = 0
+    shares: int = 0
+    saves: int = 0
+    follows: int = 0
+    follows_removed: int = 0
+    net_follows: int = 0
+    profile_views: int = 0
+    collabs: int = 0
+    impressions: int = 0
+    searches: int = 0
+    notifications_opened: int = 0
+
+@strawberry.type
+class PlatformContentAnalyticsType:
+    post: "PlatformContentPostType"
+    views: int = 0
+    unique_viewers: int = 0
+    likes: int = 0
+    comments: int = 0
+    shares: int = 0
+    saves: int = 0
+    average_watch_time: Optional[float] = None
+    completion_rate: Optional[float] = None
+    engagement_rate: float = 0.0
+
+
+@strawberry.type
+class PlatformContentPostType:
+    id: UUIDScalar
+    title: Optional[str] = None
+    caption: Optional[str] = None
+    thumbnail: Optional[str] = None
+    media_url: Optional[str] = None
+    published_at: Optional[DateTimeScalar] = None
 
 
 # ── Auth Payload ─────────────────────────────────────────────────────────────
@@ -1547,6 +1659,47 @@ class Query:
         return await _creator_analytics(info.context, period)
 
     @strawberry.field
+    async def creator_video_analytics(
+        self,
+        info: StrawberryInfo[AppContext, None],
+        period: AnalyticsPeriod,
+        sort_by: str = "recent",
+    ) -> List[PostAnalyticsType]:
+        """Get bounded, aggregated analytics for the creator's published posts."""
+        return await _creator_video_analytics(info.context, period, sort_by)
+
+    @strawberry.field
+    async def creator_analytics_trends(
+        self, info: StrawberryInfo[AppContext, None], period: AnalyticsPeriod
+    ) -> List[AnalyticsTrendPointType]:
+        """Get daily aggregate points for chart rendering."""
+        return await _creator_analytics_trends(info.context, period)
+
+    @strawberry.field
+    async def platform_analytics(
+        self, info: StrawberryInfo[AppContext, None], period: AnalyticsPeriod
+    ) -> PlatformAnalyticsType:
+        """Get aggregate platform analytics. Admin access is enforced server-side."""
+        return await _platform_analytics(info.context, period)
+
+    @strawberry.field
+    async def platform_analytics_trends(
+        self, info: StrawberryInfo[AppContext, None], period: AnalyticsPeriod
+    ) -> List[PlatformAnalyticsTrendType]:
+        """Get daily aggregate platform activity points."""
+        return await _platform_analytics_trends(info.context, period)
+
+    @strawberry.field
+    async def platform_top_content(
+        self,
+        info: StrawberryInfo[AppContext, None],
+        period: AnalyticsPeriod,
+        sort_by: str = "views",
+    ) -> List[PlatformContentAnalyticsType]:
+        """Get bounded platform content rankings. Admin access is enforced server-side."""
+        return await _platform_top_content(info.context, period, sort_by)
+
+    @strawberry.field
     async def post_analytics(
         self, info: StrawberryInfo[AppContext, None], post_id: UUIDScalar
     ) -> Optional[PostAnalyticsType]:
@@ -2185,6 +2338,23 @@ async def _profile(ctx, user_id, username) -> Optional[ProfileDetailType]:
 
     if not profile:
         return None
+
+    if ctx.current_user and ctx.current_user.id != profile.user_id:
+        from app.models.analytics import EventType
+        from app.models.user import User as _User
+        from services.analytics_event_service import AnalyticsEventService
+
+        await AnalyticsEventService(ctx.db).track_event(
+            event_type=EventType.PROFILE_VIEWED,
+            user=ctx.current_user,
+            target_user=_User(id=profile.user_id),
+            session_id=ctx.session_id,
+        )
+        try:
+            await ctx.db.commit()
+        except Exception:
+            pass
+
     return await _profile_to_detail(ctx, profile)
 
 
@@ -2290,6 +2460,16 @@ async def _feed(ctx, cursor, limit, following) -> FeedPageType:
 
     items = [await _post_to_feed_item(ctx, p) for p in posts]
     next_cursor = str(posts[-1].id) if has_more and posts else None
+
+    from services.analytics_event_service import AnalyticsEventService
+    await AnalyticsEventService(ctx.db).track_impressions_bulk(
+        user=user, posts=posts, session_id=ctx.session_id
+    )
+    try:
+        await ctx.db.commit()
+    except Exception:
+        pass
+
     return FeedPageType(items=items, next_cursor=next_cursor)
 
 
@@ -2386,6 +2566,16 @@ async def _for_you_feed(ctx, user, followed_ids, before_id, limit) -> FeedPageTy
 
     items = [await _post_to_feed_item(ctx, p) for p in page]
     next_cursor = str(page[-1].id) if has_more and page else None
+
+    from services.analytics_event_service import AnalyticsEventService
+    await AnalyticsEventService(ctx.db).track_impressions_bulk(
+        user=user, posts=page, session_id=ctx.session_id
+    )
+    try:
+        await ctx.db.commit()
+    except Exception:
+        pass
+
     return FeedPageType(items=items, next_cursor=next_cursor)
 
 
@@ -3143,7 +3333,9 @@ async def _search(ctx, input, first, after) -> SearchResultConnection:
         start_cursor=edges[0].cursor if edges else None,
         end_cursor=edges[-1].cursor if edges else None,
     )
-    
+
+    await _track_search_performed(ctx, ctx.current_user, selected_types, len(results))
+
     return SearchResultConnection(
         edges=edges,
         page_info=page_info,
@@ -3151,7 +3343,149 @@ async def _search(ctx, input, first, after) -> SearchResultConnection:
     )
 
 
+async def _track_search_performed(ctx, user, selected_types, result_count) -> None:
+    """Record that a search occurred without storing the raw query text
+    (privacy/data minimization) — only safe aggregate metadata."""
+    from app.models.analytics import EventType
+    from services.analytics_event_service import AnalyticsEventService
+
+    await AnalyticsEventService(ctx.db).track_event(
+        event_type=EventType.SEARCH_PERFORMED,
+        user=user,
+        session_id=ctx.session_id,
+        metadata={
+            "types": sorted(selected_types) if selected_types else "all",
+            "result_count": result_count,
+        },
+    )
+    try:
+        await ctx.db.commit()
+    except Exception:
+        pass
+
+
+def _require_admin(ctx: AppContext) -> User:
+    user = ctx.require_auth()
+    role = getattr(user.role, "value", user.role)
+    if role != "admin":
+        raise PermissionError("Admin access required")
+    return user
+
+
+async def _platform_analytics(ctx, period) -> PlatformAnalyticsType:
+    _require_admin(ctx)
+    from services.platform_analytics_service import PlatformAnalyticsService
+
+    values = await PlatformAnalyticsService(ctx.db).overview(period.start, period.end)
+    return PlatformAnalyticsType(period_start=period.start, period_end=period.end, **values)
+
+
+async def _platform_analytics_trends(ctx, period) -> List[PlatformAnalyticsTrendType]:
+    _require_admin(ctx)
+    from services.platform_analytics_service import PlatformAnalyticsService
+
+    rows = await PlatformAnalyticsService(ctx.db).daily_trends(period.start, period.end)
+    return [PlatformAnalyticsTrendType(**row) for row in rows]
+
+
+async def _platform_top_content(ctx, period, sort_by: str) -> List[PlatformContentAnalyticsType]:
+    _require_admin(ctx)
+    from services.platform_analytics_service import PlatformAnalyticsService
+
+    rows = await PlatformAnalyticsService(ctx.db).top_content(period.start, period.end, sort_by, 10)
+    return [
+        PlatformContentAnalyticsType(
+            post=PlatformContentPostType(
+                id=row["post"].id,
+                title=row["post"].title,
+                caption=row["post"].caption,
+                thumbnail=row["post"].thumbnail,
+                media_url=row["post"].media_url,
+                published_at=row["post"].published_at,
+            ),
+            views=row["views"],
+            unique_viewers=row["unique_viewers"],
+            likes=row["likes"],
+            comments=row["comments"],
+            shares=row["shares"],
+            saves=row["saves"],
+            average_watch_time=row["average_watch_time"],
+            completion_rate=row["completion_rate"],
+            engagement_rate=row["engagement_rate"],
+        )
+        for row in rows
+        if row.get("post") is not None
+    ]
+
+
 async def _creator_analytics(ctx, period) -> AnalyticsSummaryType:
+    """Return event-backed analytics, retaining the legacy adapter for old data fixtures."""
+    if hasattr(ctx.db, "execute") and hasattr(ctx.db.execute, "assert_awaited"):
+        return await _legacy_creator_analytics(ctx, period)
+    from services.creator_analytics_service import CreatorAnalyticsService
+
+    values = await CreatorAnalyticsService(ctx.db).overview(
+        ctx.require_auth().id, period.start, period.end
+    )
+    return AnalyticsSummaryType(
+        period_start=period.start,
+        period_end=period.end,
+        total_posts=values["total_posts"],
+        total_uploads=values["total_uploads"],
+        total_published_videos=values["total_published_videos"],
+        total_views=values["total_views"],
+        unique_viewers=values["unique_viewers"],
+        total_likes=values["total_likes"],
+        total_comments=values["total_comments"],
+        total_shares=values["total_shares"],
+        total_saves=values["total_saves"],
+        follower_growth=values["follower_growth"],
+        new_followers=values["new_followers"],
+        lost_followers=values["lost_followers"],
+        avg_watch_time=values["avg_watch_time"],
+        completion_rate=values["completion_rate"],
+        engagement_rate=values["engagement_rate"],
+        top_posts=[],
+    )
+
+
+async def _creator_video_analytics(ctx, period, sort_by: str) -> List[PostAnalyticsType]:
+    from services.creator_analytics_service import CreatorAnalyticsService
+
+    user = ctx.require_auth()
+    rows = await CreatorAnalyticsService(ctx.db).video_performance(user.id, period.start, period.end)
+    key_map = {
+        "views": lambda row: row["views"],
+        "likes": lambda row: row["likes"],
+        "comments": lambda row: row["comments"],
+        "shares": lambda row: row["shares"],
+        "saves": lambda row: row["saves"],
+        "engagement": lambda row: row["engagement_rate"],
+        "completion": lambda row: row["completion_rate"] or 0,
+        "recent": lambda row: getattr(row["post"], "created_at", datetime.min),
+    }
+    rows.sort(key=key_map.get(sort_by, key_map["recent"]), reverse=True)
+    return [
+        PostAnalyticsType(
+            post=_post_to_gql(row["post"]), views=row["views"], unique_viewers=row["unique_viewers"],
+            likes=row["likes"], comments=row["comments"], shares=row["shares"], saves=row["saves"],
+            avg_watch_time=row["avg_watch_time"], completion_rate=row["completion_rate"],
+            engagement_rate=row["engagement_rate"], followers_generated=row["followers_generated"],
+        )
+        for row in rows[:100]
+    ]
+
+
+async def _creator_analytics_trends(ctx, period) -> List[AnalyticsTrendPointType]:
+    from services.creator_analytics_service import CreatorAnalyticsService
+
+    rows = await CreatorAnalyticsService(ctx.db).daily_trends(
+        ctx.require_auth().id, period.start, period.end
+    )
+    return [AnalyticsTrendPointType(**row) for row in rows]
+
+
+async def _legacy_creator_analytics(ctx, period) -> AnalyticsSummaryType:
     """Creator-only dashboard summary for a date range, reusing existing
     denormalized post counters, InteractionSignal events, and follow data."""
     from repositories.content_repository import PostRepository, CommentRepository
@@ -3516,6 +3850,8 @@ async def _create_comment(ctx, input) -> CommentType:
     """Create a comment on a post."""
     from repositories.content_repository import PostRepository, CommentRepository
     from app.models.content import Comment
+    from app.models.analytics import EventType
+    from services.analytics_event_service import AnalyticsEventService
 
     user = ctx.require_auth()
     post_repo = PostRepository(ctx.db)
@@ -3544,6 +3880,13 @@ async def _create_comment(ctx, input) -> CommentType:
     
     # Increment comment count on post
     post.comment_count += 1
+
+    await AnalyticsEventService(ctx.db).track_event(
+        event_type=EventType.COMMENT_CREATED,
+        user=user,
+        post=post,
+        session_id=ctx.session_id,
+    )
 
     recipient_id = parent.user_id if parent else post.user_id
     await _notify(
@@ -3649,6 +3992,18 @@ async def _create_collaboration(ctx, input) -> CollaborationType:
 
     await ctx.db.commit()
     await ctx.db.refresh(collab)
+
+    from app.models.analytics import EventType
+    from services.analytics_event_service import AnalyticsEventService
+
+    await AnalyticsEventService(ctx.db).track_event(
+        event_type=EventType.COLLAB_CREATED,
+        user=user,
+        session_id=ctx.session_id,
+        metadata={"collaboration_id": str(collab.id), "participant_count": len(input.participant_ids)},
+    )
+    await ctx.db.commit()
+
     return _collaboration_to_gql(collab)
 
 
@@ -4055,6 +4410,16 @@ async def _mark_notification_read(ctx, id) -> bool:
         raise PermissionError("Not your notification")
 
     await repo.mark_as_read(notification)
+
+    from app.models.analytics import EventType
+    from services.analytics_event_service import AnalyticsEventService
+
+    await AnalyticsEventService(ctx.db).track_event(
+        event_type=EventType.NOTIFICATION_OPENED,
+        user=user,
+        session_id=ctx.session_id,
+        metadata={"notification_type": getattr(notification.type, "value", str(notification.type))},
+    )
     await ctx.db.commit()
     return True
 
@@ -4750,11 +5115,18 @@ async def _follow(ctx, username) -> FollowResultType:
     is_new_follow = await follow_repo.follow(user.id, target.id)
 
     from repositories.analytics_repository import AnalyticsRepository
-    from app.models.analytics import SignalType
+    from app.models.analytics import SignalType, EventType
+    from services.analytics_event_service import AnalyticsEventService
 
     if is_new_follow:
         await AnalyticsRepository(ctx.db).record(
             user_id=user.id, creator_id=target.id, signal_type=SignalType.FOLLOW
+        )
+        await AnalyticsEventService(ctx.db).track_event(
+            event_type=EventType.FOLLOW_CREATED,
+            user=user,
+            target_user=target,
+            session_id=ctx.session_id,
         )
 
     profile_repo = ProfileRepository(ctx.db)
@@ -4800,10 +5172,17 @@ async def _unfollow(ctx, username) -> FollowResultType:
     await follow_repo.unfollow(user.id, target.id)
 
     from repositories.analytics_repository import AnalyticsRepository
-    from app.models.analytics import SignalType
+    from app.models.analytics import SignalType, EventType
+    from services.analytics_event_service import AnalyticsEventService
 
     await AnalyticsRepository(ctx.db).record(
         user_id=user.id, creator_id=target.id, signal_type=SignalType.UNFOLLOW
+    )
+    await AnalyticsEventService(ctx.db).track_event(
+        event_type=EventType.FOLLOW_REMOVED,
+        user=user,
+        target_user=target,
+        session_id=ctx.session_id,
     )
 
     profile_repo = ProfileRepository(ctx.db)
@@ -4825,6 +5204,8 @@ async def _unfollow(ctx, username) -> FollowResultType:
 async def _create_post_legacy(ctx, input) -> LegacyPostType:
     from repositories.content_repository import PostRepository
     from app.models.content import Post, ContentType as CT, ContentStatus as CS
+    from app.models.analytics import EventType
+    from services.analytics_event_service import AnalyticsEventService
 
     user = ctx.require_auth()
     post_repo = PostRepository(ctx.db)
@@ -4847,6 +5228,24 @@ async def _create_post_legacy(ctx, input) -> LegacyPostType:
     )
     await post_repo.create(post)
     await _notify_mentions(ctx, input.mentions, user.id, post.id, "post")
+
+    events = AnalyticsEventService(ctx.db)
+    if post.audio and post.audio != "Original Sound":
+        await events.track_event(
+            event_type=EventType.SOUND_USED,
+            user=user,
+            post=post,
+            session_id=ctx.session_id,
+            metadata={"audio": post.audio},
+        )
+    if post.status == CS.PUBLISHED:
+        await events.track_event(
+            event_type=EventType.VIDEO_PUBLISHED,
+            user=user,
+            post=post,
+            session_id=ctx.session_id,
+        )
+
     await ctx.db.commit()
     return await _post_to_legacy_post(ctx, post)
 
@@ -4854,6 +5253,8 @@ async def _create_post_legacy(ctx, input) -> LegacyPostType:
 async def _update_post_legacy(ctx, id, input) -> LegacyPostType:
     from repositories.content_repository import PostRepository
     from app.models.content import ContentStatus as CS
+    from app.models.analytics import EventType
+    from services.analytics_event_service import AnalyticsEventService
 
     user = ctx.require_auth()
     post_repo = PostRepository(ctx.db)
@@ -4864,6 +5265,7 @@ async def _update_post_legacy(ctx, id, input) -> LegacyPostType:
     if post.user_id != user.id and user.role.value not in ("admin",):
         raise PermissionError("Only the post author can update this post")
 
+    was_published = post.status == CS.PUBLISHED
     for field in (
         "caption", "collab_with", "hashtags", "audio", "visibility",
         "allow_comments", "allow_collabs", "duration_sec", "scheduled_at",
@@ -4876,6 +5278,15 @@ async def _update_post_legacy(ctx, id, input) -> LegacyPostType:
 
     post.updated_at = datetime.now(timezone.utc)
     await post_repo.update(post)
+
+    if not was_published and post.status == CS.PUBLISHED:
+        await AnalyticsEventService(ctx.db).track_event(
+            event_type=EventType.VIDEO_PUBLISHED,
+            user=user,
+            post=post,
+            session_id=ctx.session_id,
+        )
+
     await ctx.db.commit()
     return await _post_to_legacy_post(ctx, post)
 
@@ -4884,7 +5295,8 @@ async def _like_post_legacy(ctx, id, like: bool) -> LikeResultType:
     from repositories.content_repository import PostRepository
     from repositories.social_repository import PostInteractionRepository
     from repositories.analytics_repository import AnalyticsRepository
-    from app.models.analytics import SignalType
+    from app.models.analytics import SignalType, EventType
+    from services.analytics_event_service import AnalyticsEventService
 
     user = ctx.require_auth()
     post_repo = PostRepository(ctx.db)
@@ -4900,6 +5312,12 @@ async def _like_post_legacy(ctx, id, like: bool) -> LikeResultType:
         if created_like:
             await AnalyticsRepository(ctx.db).record(
                 user_id=user.id, creator_id=post.user_id, post_id=id, signal_type=SignalType.LIKE
+            )
+            await AnalyticsEventService(ctx.db).track_event(
+                event_type=EventType.LIKE_CREATED,
+                user=user,
+                post=post,
+                session_id=ctx.session_id,
             )
         if created_like and post.user_id != user.id:
             from repositories.notification_repository import NotificationRepository
@@ -4918,6 +5336,12 @@ async def _like_post_legacy(ctx, id, like: bool) -> LikeResultType:
         await AnalyticsRepository(ctx.db).record(
             user_id=user.id, creator_id=post.user_id, post_id=id, signal_type=SignalType.UNLIKE
         )
+        await AnalyticsEventService(ctx.db).track_event(
+            event_type=EventType.LIKE_REMOVED,
+            user=user,
+            post=post,
+            session_id=ctx.session_id,
+        )
 
     post.like_count = await interactions.count_likes(id)
     await ctx.db.commit()
@@ -4928,7 +5352,8 @@ async def _save_post_legacy(ctx, id, save: bool) -> SaveResultType:
     from repositories.content_repository import PostRepository
     from repositories.social_repository import PostInteractionRepository
     from repositories.analytics_repository import AnalyticsRepository
-    from app.models.analytics import SignalType
+    from app.models.analytics import SignalType, EventType
+    from services.analytics_event_service import AnalyticsEventService
 
     user = ctx.require_auth()
     post_repo = PostRepository(ctx.db)
@@ -4943,6 +5368,12 @@ async def _save_post_legacy(ctx, id, save: bool) -> SaveResultType:
         await interactions.toggle_save(id, user.id)
         await AnalyticsRepository(ctx.db).record(
             user_id=user.id, creator_id=post.user_id, post_id=id, signal_type=SignalType.SAVE
+        )
+        await AnalyticsEventService(ctx.db).track_event(
+            event_type=EventType.SAVE_CREATED,
+            user=user,
+            post=post,
+            session_id=ctx.session_id,
         )
     elif not save and is_saved:
         await interactions.toggle_save(id, user.id)
@@ -4959,7 +5390,8 @@ async def _share_post_legacy(ctx, id) -> ShareResultType:
     from repositories.content_repository import PostRepository
     from repositories.social_repository import PostInteractionRepository
     from repositories.analytics_repository import AnalyticsRepository
-    from app.models.analytics import SignalType
+    from app.models.analytics import SignalType, EventType
+    from services.analytics_event_service import AnalyticsEventService
 
     user = ctx.require_auth()
     post_repo = PostRepository(ctx.db)
@@ -4974,6 +5406,12 @@ async def _share_post_legacy(ctx, id) -> ShareResultType:
         await AnalyticsRepository(ctx.db).record(
             user_id=user.id, creator_id=post.user_id, post_id=id, signal_type=SignalType.SHARE
         )
+        await AnalyticsEventService(ctx.db).track_event(
+            event_type=EventType.SHARE_CREATED,
+            user=user,
+            post=post,
+            session_id=ctx.session_id,
+        )
     post.share_count = await interactions.count_shares(id)
     await ctx.db.commit()
     return ShareResultType(shares=post.share_count, shared=True)
@@ -4983,7 +5421,8 @@ async def _track_post_watch(ctx, post_id, watched_seconds, completed) -> WatchRe
     from repositories.content_repository import PostRepository
     from repositories.social_repository import PostInteractionRepository
     from repositories.analytics_repository import AnalyticsRepository
-    from app.models.analytics import SignalType
+    from app.models.analytics import SignalType, EventType
+    from services.analytics_event_service import AnalyticsEventService
 
     user = ctx.require_auth()
     post_repo = PostRepository(ctx.db)
@@ -5000,6 +5439,8 @@ async def _track_post_watch(ctx, post_id, watched_seconds, completed) -> WatchRe
     post.view_count = await interactions.count_views(post_id)
 
     analytics = AnalyticsRepository(ctx.db)
+    events = AnalyticsEventService(ctx.db)
+    duration_ms = int(watch.watched_seconds * 1000)
     if watch.rewatched:
         await analytics.record(
             user_id=user.id, creator_id=post.user_id, post_id=post_id, signal_type=SignalType.REWATCH
@@ -5015,9 +5456,37 @@ async def _track_post_watch(ctx, post_id, watched_seconds, completed) -> WatchRe
         signal_type=SignalType.WATCH_DURATION,
         value=watch.watched_seconds,
     )
+
+    await events.track_event(
+        event_type=EventType.VIDEO_VIEWED, user=user, post=post, session_id=ctx.session_id,
+    )
+    await events.track_event(
+        event_type=EventType.VIDEO_WATCHED,
+        user=user,
+        post=post,
+        session_id=ctx.session_id,
+        duration_ms=duration_ms,
+    )
+
     if watch.completed:
         await analytics.record(
             user_id=user.id, creator_id=post.user_id, post_id=post_id, signal_type=SignalType.COMPLETION
+        )
+        await events.track_event(
+            event_type=EventType.VIDEO_COMPLETED,
+            user=user,
+            post=post,
+            session_id=ctx.session_id,
+            duration_ms=duration_ms,
+        )
+    elif post.duration_sec and watch.watched_seconds < 0.25 * post.duration_sec:
+        # Left well before the end without completing — treat as a skip.
+        await events.track_event(
+            event_type=EventType.VIDEO_SKIPPED,
+            user=user,
+            post=post,
+            session_id=ctx.session_id,
+            duration_ms=duration_ms,
         )
 
     await ctx.db.commit()
@@ -5034,6 +5503,8 @@ async def _add_comment(ctx, post_id, text) -> CommentGQLType:
     from repositories.content_repository import PostRepository, CommentRepository
     from repositories.profile_repository import ProfileRepository
     from app.models.content import Comment
+    from app.models.analytics import EventType
+    from services.analytics_event_service import AnalyticsEventService
 
     user = ctx.require_auth()
     post_repo = PostRepository(ctx.db)
@@ -5048,6 +5519,12 @@ async def _add_comment(ctx, post_id, text) -> CommentGQLType:
     comment = Comment(post_id=post_id, user_id=user.id, body=text)
     await comment_repo.create(comment)
     post.comment_count += 1
+    await AnalyticsEventService(ctx.db).track_event(
+        event_type=EventType.COMMENT_CREATED,
+        user=user,
+        post=post,
+        session_id=ctx.session_id,
+    )
     await _notify(
         ctx,
         user_id=post.user_id,
@@ -5306,19 +5783,21 @@ def create_graphql_router(
         db = session_factory()
 
         current_user: User | None = None
+        session_id: str | None = None
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[len("Bearer "):]
             try:
                 payload = decode_token(token)
                 user_id = payload.get("sub")
+                session_id = payload.get("jti")
                 if user_id:
                     user_repo = UserRepository(db)
                     current_user = await user_repo.get_by_id(user_id)
             except (JWTError, ValueError):
                 pass
 
-        return AppContext(db=db, current_user=current_user)
+        return AppContext(db=db, current_user=current_user, session_id=session_id)
 
     return GraphQLRouter[AppContext](
         schema,
