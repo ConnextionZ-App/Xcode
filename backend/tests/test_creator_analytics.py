@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from api.graphql import AppContext, _creator_analytics, _creator_video_analytics, _post_analytics
+from app.models.collaboration import CollaborationStatus
 from app.models.analytics import SignalType
 from services.creator_analytics_service import CreatorAnalyticsService
 
@@ -263,10 +264,21 @@ class TestCreatorAnalytics:
         async def fake_count_for_creator(*args, **kwargs):
             return 0
 
+        async def fake_collaboration_totals(*args, **kwargs):
+            return {
+                "total_collaboration_requests": 0,
+                "pending_collaborations": 0,
+                "accepted_collaborations": 0,
+                "active_collaborations": 0,
+                "completed_collaborations": 0,
+                "collaboration_success_rate": None,
+            }
+
         monkeypatch.setattr(service, "_posts", fake_posts)
         monkeypatch.setattr(service.analytics_repo, "signal_totals", fake_signal_totals)
         monkeypatch.setattr(service.analytics_repo, "per_post_signal_totals", fake_per_post)
         monkeypatch.setattr("repositories.content_repository.CommentRepository.count_for_creator", fake_count_for_creator)
+        monkeypatch.setattr(service, "_collaboration_totals", fake_collaboration_totals)
 
         overview = await service.overview(creator_id, start, end)
 
@@ -281,6 +293,103 @@ class TestCreatorAnalytics:
         assert overview["avg_watch_time"] == pytest.approx(500.0 / 25)
         assert overview["completion_rate"] == pytest.approx(10 / 25 * 100)
         assert len(overview["top_posts"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_creator_service_compares_against_previous_period(self, monkeypatch):
+        creator_id = uuid.uuid4()
+        start = datetime(2026, 3, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 3, 8, tzinfo=timezone.utc)
+        service = CreatorAnalyticsService(AsyncMock())
+
+        async def fake_posts(c_id):
+            return []
+
+        signal_windows = [
+            {
+                SignalType.VIEW: {"count": 10, "total": 10.0},
+                SignalType.LIKE: {"count": 5, "total": 5.0},
+                SignalType.SHARE: {"count": 2, "total": 2.0},
+                SignalType.FOLLOW: {"count": 3, "total": 3.0},
+            },
+            {},
+        ]
+
+        async def fake_signal_totals(*args, **kwargs):
+            return signal_windows.pop(0)
+
+        async def fake_count_for_creator(*args, **kwargs):
+            return 4 if kwargs.get("start") == start else 0
+
+        async def fake_collaboration_totals(*args, **kwargs):
+            return {
+                "total_collaboration_requests": 0,
+                "pending_collaborations": 0,
+                "accepted_collaborations": 0,
+                "active_collaborations": 0,
+                "completed_collaborations": 0,
+                "collaboration_success_rate": None,
+            }
+
+        monkeypatch.setattr(service, "_posts", fake_posts)
+        monkeypatch.setattr(service.analytics_repo, "signal_totals", fake_signal_totals)
+        monkeypatch.setattr("repositories.content_repository.CommentRepository.count_for_creator", fake_count_for_creator)
+        monkeypatch.setattr(service, "_collaboration_totals", fake_collaboration_totals)
+
+        overview = await service.overview(creator_id, start, end)
+
+        assert overview["views_growth_pct"] == 100.0
+        assert overview["likes_growth_pct"] == 100.0
+        assert overview["comments_growth_pct"] == 100.0
+        assert overview["shares_growth_pct"] == 100.0
+        assert overview["followers_growth_pct"] == 100.0
+
+    @pytest.mark.asyncio
+    async def test_creator_service_collaboration_status_metrics(self, monkeypatch):
+        creator_id = uuid.uuid4()
+        service = CreatorAnalyticsService(AsyncMock())
+
+        async def fake_status_counts_for_user(self, user_id):
+            assert user_id == creator_id
+            return {
+                CollaborationStatus.PROPOSED: 2,
+                CollaborationStatus.ACCEPTED: 1,
+                CollaborationStatus.IN_PROGRESS: 4,
+                CollaborationStatus.COMPLETED: 3,
+                CollaborationStatus.CANCELLED: 1,
+            }
+
+        monkeypatch.setattr(
+            "repositories.collaboration_repository.CollaborationRepository.status_counts_for_user",
+            fake_status_counts_for_user,
+        )
+
+        values = await service._collaboration_totals(creator_id)
+
+        assert values["total_collaboration_requests"] == 11
+        assert values["pending_collaborations"] == 2
+        assert values["accepted_collaborations"] == 1
+        assert values["active_collaborations"] == 4
+        assert values["completed_collaborations"] == 3
+        assert values["collaboration_success_rate"] == pytest.approx(75.0)
+
+    @pytest.mark.asyncio
+    async def test_creator_trends_fill_missing_days(self, monkeypatch):
+        creator_id = uuid.uuid4()
+        service = CreatorAnalyticsService(AsyncMock())
+        start = datetime(2026, 4, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 4, 3, tzinfo=timezone.utc)
+
+        async def fake_daily_signal_totals(*args, **kwargs):
+            return [{"date": "2026-04-02", "views": 5, "likes": 1, "comments": 0, "shares": 0, "saves": 0, "followers_gained": 1}]
+
+        monkeypatch.setattr(service.analytics_repo, "daily_signal_totals", fake_daily_signal_totals)
+
+        rows = await service.daily_trends(creator_id, start, end)
+
+        assert [row["date"] for row in rows] == ["2026-04-01", "2026-04-02", "2026-04-03"]
+        assert rows[0]["views"] == 0
+        assert rows[1]["views"] == 5
+        assert rows[2]["followers_gained"] == 0
 
 
 class TestPostAnalytics:

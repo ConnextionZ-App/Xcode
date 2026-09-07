@@ -86,6 +86,9 @@ export interface CreatorAnalyticsResponse {
     totalShares: number; totalSaves: number; followerGrowth: number; newFollowers: number;
     lostFollowers: number; avgWatchTime: number | null; completionRate: number | null;
     engagementRate: number; totalPosts: number; activeCollaborations: number; completedCollaborations: number;
+    totalCollaborationRequests: number; pendingCollaborations: number; acceptedCollaborations: number;
+    collaborationSuccessRate: number | null; viewsGrowthPct: number | null; likesGrowthPct: number | null;
+    commentsGrowthPct: number | null; sharesGrowthPct: number | null; followersGrowthPct: number | null;
   };
   creatorVideoAnalytics: {
     post: {
@@ -108,6 +111,8 @@ export async function fetchCreatorAnalytics(range: Range): Promise<Result<Creato
         totalPosts totalViews uniqueViewers totalLikes totalComments totalShares totalSaves
         followerGrowth newFollowers lostFollowers avgWatchTime completionRate engagementRate
         activeCollaborations completedCollaborations
+        totalCollaborationRequests pendingCollaborations acceptedCollaborations collaborationSuccessRate
+        viewsGrowthPct likesGrowthPct commentsGrowthPct sharesGrowthPct followersGrowthPct
       }
       creatorVideoAnalytics(period: $period, sortBy: "views") {
         post { id caption viewCount likeCount commentCount shareCount status scheduledAt createdAt media { thumbnailUrl url } }
@@ -143,8 +148,8 @@ export async function fetchDashboard(range: Range): Promise<Result<DashboardData
       const point = trendsByDate.get(date);
       return point ? (key === "followers" ? point.followersGained : point[key]) : 0;
     });
-  const metric = (key: MetricKey, value: number): Metric => ({
-    key, label: METRIC_LABELS[key], value, deltaPct: 0, series: seriesFor(key),
+  const metric = (key: MetricKey, value: number, deltaPct: number | null): Metric => ({
+    key, label: METRIC_LABELS[key], value, deltaPct: deltaPct ?? 0, series: seriesFor(key),
   });
   const content = result.value.creatorVideoAnalytics.map((row) => ({
     id: row.post.id,
@@ -159,16 +164,25 @@ export async function fetchDashboard(range: Range): Promise<Result<DashboardData
     createdAt: Date.parse(row.post.createdAt),
   } as ContentRow));
   const collab: CollabStats = {
-    totalRequests: null, pending: null, accepted: null,
+    totalRequests: summary.totalCollaborationRequests,
+    pending: summary.pendingCollaborations,
+    accepted: summary.acceptedCollaborations,
     completed: summary.completedCollaborations, active: summary.activeCollaborations,
-    successRatePct: null, avgResponseHours: null, collabScore: null, repeatCollaborators: null,
+    successRatePct: summary.collaborationSuccessRate,
+    avgResponseHours: null, collabScore: null, repeatCollaborators: null,
     freelanceOpportunities: null, jobOffers: null, brandInvitations: null, adOpportunities: null,
   };
   return {
     ok: true,
     value: {
       range, days,
-      metrics: [metric("views", summary.totalViews), metric("likes", summary.totalLikes), metric("comments", summary.totalComments), metric("shares", summary.totalShares), metric("followers", summary.newFollowers)],
+      metrics: [
+        metric("views", summary.totalViews, summary.viewsGrowthPct),
+        metric("likes", summary.totalLikes, summary.likesGrowthPct),
+        metric("comments", summary.totalComments, summary.commentsGrowthPct),
+        metric("shares", summary.totalShares, summary.sharesGrowthPct),
+        metric("followers", summary.newFollowers, summary.followersGrowthPct),
+      ],
       collab, content, best: content[0], quality: {
         uniqueViewers: summary.uniqueViewers,
         saves: summary.totalSaves,

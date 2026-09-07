@@ -257,7 +257,20 @@ class PlatformAnalyticsService:
         for values in grouped.values():
             values["net_follows"] = values["follows"] - values["follows_removed"]
             values["engagement"] = values["likes"] + values["comments"] + values["shares"] + values["saves"]
-        return [{"date": date, **values} for date, values in sorted(grouped.items())]
+        points = []
+        current_day = start.date()
+        end_day = end.date()
+        while current_day <= end_day:
+            date_key = current_day.isoformat()
+            values = grouped.get(date_key, {
+                "uploads": 0, "published_videos": 0, "views": 0, "completed_views": 0,
+                "likes": 0, "comments": 0, "shares": 0, "saves": 0, "follows": 0,
+                "follows_removed": 0, "profile_views": 0, "collabs": 0, "impressions": 0,
+                "searches": 0, "notifications_opened": 0, "net_follows": 0, "engagement": 0,
+            })
+            points.append({"date": date_key, **values})
+            current_day += timedelta(days=1)
+        return points
 
     async def top_content(self, start: datetime, end: datetime, sort_by: str = "views", limit: int = 10) -> list[dict]:
         metric = {

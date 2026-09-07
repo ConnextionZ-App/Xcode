@@ -837,10 +837,19 @@ class AnalyticsSummaryType:
 
     active_collaborations: int = 0
     completed_collaborations: int = 0
+    total_collaboration_requests: int = 0
+    pending_collaborations: int = 0
+    accepted_collaborations: int = 0
+    collaboration_success_rate: Optional[float] = None
     total_earnings: Optional[float] = None
     earnings_currency: str = "USD"
 
     engagement_rate: float = 0.0
+    views_growth_pct: Optional[float] = None
+    likes_growth_pct: Optional[float] = None
+    comments_growth_pct: Optional[float] = None
+    shares_growth_pct: Optional[float] = None
+    followers_growth_pct: Optional[float] = None
 
     top_posts: Optional[List[PostAnalyticsType]] = None
 
@@ -3477,6 +3486,17 @@ async def _creator_analytics(ctx, period) -> AnalyticsSummaryType:
         avg_watch_time=values["avg_watch_time"],
         completion_rate=values["completion_rate"],
         engagement_rate=values["engagement_rate"],
+        views_growth_pct=values["views_growth_pct"],
+        likes_growth_pct=values["likes_growth_pct"],
+        comments_growth_pct=values["comments_growth_pct"],
+        shares_growth_pct=values["shares_growth_pct"],
+        followers_growth_pct=values["followers_growth_pct"],
+        total_collaboration_requests=values["total_collaboration_requests"],
+        pending_collaborations=values["pending_collaborations"],
+        accepted_collaborations=values["accepted_collaborations"],
+        active_collaborations=values["active_collaborations"],
+        completed_collaborations=values["completed_collaborations"],
+        collaboration_success_rate=values["collaboration_success_rate"],
         top_posts=top_post_types,
     )
 

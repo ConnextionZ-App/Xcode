@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, list
+from typing import Optional
 
-from sqlalchemy import select, and_, or_
+from sqlalchemy import func, select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.collaboration import (
@@ -68,6 +68,25 @@ class CollaborationRepository(BaseRepository[Collaboration]):
         ).limit(limit)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+
+    async def status_counts_for_user(self, user_id: uuid.UUID) -> dict[CollaborationStatus, int]:
+        """Count collaborations for a user grouped by status."""
+        participant_collab_ids = select(CollaborationParticipant.collaboration_id).where(
+            CollaborationParticipant.user_id == user_id
+        ).subquery()
+
+        result = await self.db.execute(
+            select(Collaboration.status, func.count().label("count"))
+            .where(
+                Collaboration.deleted_at.is_(None),
+                or_(
+                    Collaboration.initiator_id == user_id,
+                    Collaboration.id.in_(participant_collab_ids),
+                ),
+            )
+            .group_by(Collaboration.status)
+        )
+        return {row.status: int(row.count or 0) for row in result.all()}
 
     async def get_marketplace(
         self,

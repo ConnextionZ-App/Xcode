@@ -531,11 +531,20 @@ type AnalyticsSummary {
   # Earnings / Collaboration
   activeCollaborations: Int!
   completedCollaborations: Int!
+  totalCollaborationRequests: Int!
+  pendingCollaborations: Int!
+  acceptedCollaborations: Int!
+  collaborationSuccessRate: Float
   totalEarnings: Float
   earningsCurrency: String!
 
   # Engagement rate
   engagementRate: Float!
+  viewsGrowthPct: Float
+  likesGrowthPct: Float
+  commentsGrowthPct: Float
+  sharesGrowthPct: Float
+  followersGrowthPct: Float
 
   # Per-post analytics
   topPosts: [PostAnalytics!]

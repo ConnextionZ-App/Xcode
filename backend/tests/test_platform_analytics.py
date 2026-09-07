@@ -165,3 +165,22 @@ async def test_overview_zero_views_returns_safe_rates():
     assert values["engagement_rate"] == 0.0
     assert values["average_watch_time"] is None
     assert values["completion_rate"] is None
+
+
+@pytest.mark.asyncio
+async def test_platform_trends_fill_missing_days():
+    class Result:
+        def all(self):
+            return [SimpleNamespace(day="2026-01-02", event_type=EventType.VIDEO_VIEWED, count=7)]
+
+    db = AsyncMock()
+    db.execute.return_value = Result()
+    rows = await PlatformAnalyticsService(db).daily_trends(
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+        datetime(2026, 1, 3, tzinfo=timezone.utc),
+    )
+
+    assert [row["date"] for row in rows] == ["2026-01-01", "2026-01-02", "2026-01-03"]
+    assert rows[0]["views"] == 0
+    assert rows[1]["views"] == 7
+    assert rows[2]["engagement"] == 0
