@@ -145,7 +145,13 @@ export function DashboardScreen({
           <AnimatePresence mode="wait">
             <motion.div key={tab} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
               transition={{ duration: 0.18 }}>
-              {tab === "overview" && <Overview data={data} t={t} onOpenPost={onOpenPost} canOpenPost={canOpenPost} />}
+              {tab === "overview" && data.content.length === 0 && data.metrics.every((metric) => metric.value === 0) ? (
+                <EmptyState icon={<BarChart3 className="w-7 h-7" />} t={t}
+                  title="No analytics yet"
+                  body="Publish content and your views, engagement, and watch metrics will appear here." />
+              ) : tab === "overview" ? (
+                <Overview data={data} t={t} onOpenPost={onOpenPost} canOpenPost={canOpenPost} />
+              ) : null}
               {tab === "content" && (
                 <Content data={data} t={t} onOpenPost={onOpenPost} canOpenPost={canOpenPost}
                   onSharePost={onSharePost} onChanged={() => void load(range)} />

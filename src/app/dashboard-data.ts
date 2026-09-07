@@ -4,6 +4,7 @@
 // The screen owns presentation only; aggregation and date filtering stay in the backend.
 
 import { type Result } from "./auth-store";
+import { analyticsPeriod } from "./analytics-utils";
 import { type ContentItem } from "./creators";
 import { graphqlRequestResult } from "./profile-graphql";
 
@@ -81,28 +82,19 @@ const METRIC_LABELS: Record<MetricKey, string> = {
   followers: "New followers",
 };
 
-// ─── FETCH ───────────────────────────────────────────────────────────────────
+export interface CreatorAnalyticsResponse {
+  creatorAnalytics: {
+    totalViews: number; uniqueViewers: number; totalLikes: number; totalComments: number;
+    totalShares: number; totalSaves: number; followerGrowth: number; newFollowers: number;
+    lostFollowers: number; avgWatchTime: number | null; completionRate: number | null;
+    engagementRate: number; totalPosts: number;
+  };
+  creatorVideoAnalytics: { post: ContentItem; views: number; likes: number; comments: number; shares: number; saves: number }[];
+  creatorAnalyticsTrends: { date: string; views: number; likes: number; comments: number; shares: number; saves: number; followersGained: number }[];
+}
 
-/**
- * The network seam. Latency is real enough that the screen's skeleton is worth
- * having, and an offline browser fails the way a fetch would — the dashboard is
- * the screen where a silent stale number would be most misleading.
- */
-export async function fetchDashboard(range: Range): Promise<Result<DashboardData>> {
-  const days = RANGES.find((r) => r.id === range)!.days;
-  const end = new Date();
-  const start = new Date(end.getTime() - days * 86_400_000);
-  const period = { start: start.toISOString(), end: end.toISOString() };
-  const result = await graphqlRequestResult<{
-    creatorAnalytics: {
-      totalViews: number; uniqueViewers: number; totalLikes: number; totalComments: number;
-      totalShares: number; totalSaves: number; followerGrowth: number; newFollowers: number;
-      lostFollowers: number; avgWatchTime: number | null; completionRate: number | null;
-      engagementRate: number; totalPosts: number;
-    };
-    creatorVideoAnalytics: { post: ContentItem; views: number; likes: number; comments: number; shares: number; saves: number }[];
-    creatorAnalyticsTrends: { date: string; views: number; likes: number; comments: number; shares: number; saves: number; followersGained: number }[];
-  }>(`
+export async function fetchCreatorAnalytics(range: Range): Promise<Result<CreatorAnalyticsResponse>> {
+  return graphqlRequestResult<CreatorAnalyticsResponse>(`
     query CreatorAnalytics($period: AnalyticsPeriod!) {
       creatorAnalytics(period: $period) {
         totalPosts totalViews uniqueViewers totalLikes totalComments totalShares totalSaves
@@ -114,7 +106,19 @@ export async function fetchDashboard(range: Range): Promise<Result<DashboardData
       }
       creatorAnalyticsTrends(period: $period) { date views likes comments shares saves followersGained }
     }
-  `, { period });
+  `, { period: analyticsPeriod(range) });
+}
+
+// ─── FETCH ───────────────────────────────────────────────────────────────────
+
+/**
+ * The network seam. Latency is real enough that the screen's skeleton is worth
+ * having, and an offline browser fails the way a fetch would — the dashboard is
+ * the screen where a silent stale number would be most misleading.
+ */
+export async function fetchDashboard(range: Range): Promise<Result<DashboardData>> {
+  const days = RANGES.find((r) => r.id === range)!.days;
+  const result = await fetchCreatorAnalytics(range);
   if (!result.ok) return result;
 
   const summary = result.value.creatorAnalytics;
@@ -143,7 +147,7 @@ export async function fetchDashboard(range: Range): Promise<Result<DashboardData
         avgWatchTime: summary.avgWatchTime,
         completionRate: summary.completionRate,
         engagementRate: summary.engagementRate,
-      }, generatedAt: end.getTime(),
+      }, generatedAt: Date.now(),
     },
   };
 }
