@@ -5,20 +5,23 @@ import { ACCENT, useTokens } from "../settings-ui";
 import { useTheme } from "../ThemeContext";
 import type { PageProps } from "./settingsPages.types";
 
-type Range = "today" | "7d" | "28d" | "90d";
+type Range = "today" | "7d" | "30d" | "90d";
 const ranges: { id: Range; label: string; days: number }[] = [
   { id: "today", label: "Today", days: 1 },
   { id: "7d", label: "7 Days", days: 7 },
-  { id: "28d", label: "28 Days", days: 28 },
+  { id: "30d", label: "30 Days", days: 30 },
   { id: "90d", label: "90 Days", days: 90 },
 ];
 
 type PlatformData = {
   platformAnalytics: {
-    totalUsers: number; newUsers: number; activeUsers: number; totalViews: number;
+    totalUsers: number; newUsers: number; totalCreators: number; newCreators: number;
+    activeUsers: number; activeCreators: number; dailyActiveUsers: number | null; weeklyActiveUsers: number | null; monthlyActiveUsers: number | null; totalViews: number;
     totalPublishedVideos: number; engagementRate: number; followsCreated: number;
     collabsCreated: number; totalLikes: number; totalComments: number; totalShares: number;
     totalSaves: number; averageWatchTime: number | null; completionRate: number | null;
+    approvedContent: number; flaggedContent: number; removedContent: number;
+    comparison: { userGrowthPct: number | null; creatorGrowthPct: number | null; contentGrowthPct: number | null; viewsGrowthPct: number | null; engagementGrowthPct: number | null; activeUsersGrowthPct: number | null } | null;
   };
   platformAnalyticsTrends: { date: string; views: number; uploads: number; publishedVideos: number; engagement: number }[];
   platformTopContent: { post: { id: string; caption: string; thumbnail: string }; views: number; likes: number; comments: number; shares: number; saves: number; engagementRate: number }[];
@@ -27,7 +30,7 @@ type PlatformData = {
 export function PlatformAnalyticsPage({ onBack, t }: PageProps) {
   const isDark = useTheme();
   const tokens = useTokens(isDark);
-  const [range, setRange] = useState<Range>("28d");
+  const [range, setRange] = useState<Range>("30d");
   const [data, setData] = useState<PlatformData | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
 
@@ -38,7 +41,7 @@ export function PlatformAnalyticsPage({ onBack, t }: PageProps) {
     const start = new Date(end.getTime() - option.days * 86_400_000);
     const result = await graphqlRequestResult<PlatformData>(`
       query PlatformAnalytics($period: AnalyticsPeriod!) {
-        platformAnalytics(period: $period) { totalUsers newUsers activeUsers totalViews totalPublishedVideos engagementRate followsCreated collabsCreated totalLikes totalComments totalShares totalSaves averageWatchTime completionRate }
+        platformAnalytics(period: $period) { totalUsers newUsers totalCreators newCreators activeUsers activeCreators dailyActiveUsers weeklyActiveUsers monthlyActiveUsers totalViews totalPublishedVideos engagementRate followsCreated collabsCreated totalLikes totalComments totalShares totalSaves averageWatchTime completionRate approvedContent flaggedContent removedContent comparison { userGrowthPct creatorGrowthPct contentGrowthPct viewsGrowthPct engagementGrowthPct activeUsersGrowthPct } }
         platformAnalyticsTrends(period: $period) { date views uploads publishedVideos engagement }
         platformTopContent(period: $period, sortBy: "views") { post { id caption thumbnail } views likes comments shares saves engagementRate }
       }
@@ -65,8 +68,52 @@ export function PlatformAnalyticsPage({ onBack, t }: PageProps) {
         {status === "error" && <div className="py-12 text-center"><ShieldAlert className="mx-auto mb-3" style={{ color: "#f87171" }} /><p className="font-bold" style={{ color: tokens.heading }}>Platform analytics unavailable</p><p className="text-[13px] mt-1" style={{ color: tokens.sub }}>You may not have administrator access, or the service is unavailable.</p></div>}
         {status === "ready" && data && <>
           <section className="grid grid-cols-2 gap-3 mb-4">
-            {[["Total users", data.platformAnalytics.totalUsers], ["Active users", data.platformAnalytics.activeUsers], ["New users", data.platformAnalytics.newUsers], ["Views", data.platformAnalytics.totalViews], ["Published videos", data.platformAnalytics.totalPublishedVideos], ["Engagement", `${data.platformAnalytics.engagementRate.toFixed(1)}%`], ["Follows", data.platformAnalytics.followsCreated], ["Collabs", data.platformAnalytics.collabsCreated]].map(([label, value]) => <div key={String(label)} className="rounded-2xl p-3.5" style={{ background: tokens.groupBg, border: tokens.groupBorder }}><p className="font-extrabold text-[20px]" style={{ color: tokens.heading }}>{value}</p><p className="text-[12px]" style={{ color: tokens.sub }}>{label}</p></div>)}
+              {[
+                ["Total users", data.platformAnalytics.totalUsers],
+                ["Total creators", data.platformAnalytics.totalCreators],
+                ["Active users", data.platformAnalytics.activeUsers],
+                ["Active creators", data.platformAnalytics.activeCreators],
+                ["New users", data.platformAnalytics.newUsers],
+                ["New creators", data.platformAnalytics.newCreators],
+                ["Views", data.platformAnalytics.totalViews],
+                ["Published videos", data.platformAnalytics.totalPublishedVideos],
+                ["Engagement", `${data.platformAnalytics.engagementRate.toFixed(1)}%`]
+              ].map(([label, value]) => (
+                <div key={String(label)} className="rounded-2xl p-3.5" style={{ background: tokens.groupBg, border: tokens.groupBorder }}>
+                  <p className="font-extrabold text-[20px]" style={{ color: tokens.heading }}>{value}</p>
+                  <p className="text-[12px]" style={{ color: tokens.sub }}>{label}</p>
+                </div>
+              ))}
           </section>
+            <section className="rounded-2xl p-4 mb-4" style={{ background: tokens.groupBg, border: tokens.groupBorder }}>
+              <h2 className="font-bold mb-3" style={{ color: tokens.heading }}>Period comparison</h2>
+              <div className="grid grid-cols-2 gap-2 text-[12px]" style={{ color: tokens.sub }}>
+                {[
+                  ["Users", data.platformAnalytics.comparison?.userGrowthPct],
+                  ["Creators", data.platformAnalytics.comparison?.creatorGrowthPct],
+                  ["Content", data.platformAnalytics.comparison?.contentGrowthPct],
+                  ["Views", data.platformAnalytics.comparison?.viewsGrowthPct],
+                  ["Engagement", data.platformAnalytics.comparison?.engagementGrowthPct],
+                  ["Active users", data.platformAnalytics.comparison?.activeUsersGrowthPct]
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="flex justify-between">
+                    <span>{label}</span>
+                    <span>{typeof value === "number" ? `${value >= 0 ? "+" : ""}${value.toFixed(1)}%` : "-"}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+            <section className="rounded-2xl p-4 mb-4" style={{ background: tokens.groupBg, border: tokens.groupBorder }}>
+              <h2 className="font-bold mb-3" style={{ color: tokens.heading }}>Audience and content health</h2>
+              <div className="grid grid-cols-2 gap-2 text-[12px]" style={{ color: tokens.sub }}>
+                <span>Daily active users: {data.platformAnalytics.dailyActiveUsers ?? "-"}</span>
+                <span>Weekly active users: {data.platformAnalytics.weeklyActiveUsers ?? "-"}</span>
+                <span>Monthly active users: {data.platformAnalytics.monthlyActiveUsers ?? "-"}</span>
+                <span>Approved content: {data.platformAnalytics.approvedContent}</span>
+                <span>Flagged content: {data.platformAnalytics.flaggedContent}</span>
+                <span>Removed content: {data.platformAnalytics.removedContent}</span>
+              </div>
+            </section>
           <section className="rounded-2xl p-4 mb-4" style={{ background: tokens.groupBg, border: tokens.groupBorder }}><h2 className="font-bold mb-3" style={{ color: tokens.heading }}>Activity trend</h2>{data.platformAnalyticsTrends.length === 0 ? <p className="text-[13px]" style={{ color: tokens.sub }}>No activity in this period.</p> : data.platformAnalyticsTrends.slice(-14).map((point) => <div key={point.date} className="flex justify-between text-[12px] py-1" style={{ color: tokens.sub }}><span>{point.date}</span><span>{point.views} views · {point.engagement} engagements</span></div>)}</section>
           <section><h2 className="font-bold mb-3" style={{ color: tokens.heading }}>Top content</h2>{data.platformTopContent.length === 0 ? <p className="text-[13px]" style={{ color: tokens.sub }}>No published content activity in this period.</p> : <div className="space-y-2">{data.platformTopContent.map((item) => <div key={item.post.id} className="rounded-2xl p-3" style={{ background: tokens.groupBg, border: tokens.groupBorder }}><p className="font-semibold text-[13px] truncate" style={{ color: tokens.heading }}>{item.post.caption || "Untitled post"}</p><p className="text-[12px] mt-1" style={{ color: tokens.sub }}>{item.views} views · {item.likes} likes · {item.engagementRate.toFixed(1)}% engagement</p></div>)}</div>}</section>
         </>}

@@ -40,6 +40,7 @@ async def test_admin_can_read_aggregate_platform_analytics(monkeypatch):
         "total_users": 2,
         "new_users": 1,
         "active_users": 1,
+        "active_creators": 1,
         "daily_active_users": None,
         "weekly_active_users": None,
         "monthly_active_users": None,
@@ -111,12 +112,23 @@ async def test_overview_aggregates_events_and_handles_watch_metrics():
         SimpleNamespace(event_type=EventType.VIDEO_PUBLISHED, count=2, unique_users=2, duration_ms=0),
     ]
     db = AsyncMock()
-    db.execute.side_effect = [Result(4), Result(2), Result(3), Result(rows=event_rows)]
+    db.execute.side_effect = [
+        Result(4), Result(2), Result(3), Result(1),
+        Result(3), Result(1), Result(2), Result(3), Result(4),
+        Result(rows=event_rows), Result(rows=[]), Result(1), Result(0), Result(2),
+        Result(rows=[SimpleNamespace(moderation_status="approved", count=6)]),
+    ]
     values = await PlatformAnalyticsService(db).overview(period().start, period().end)
 
     assert values["total_users"] == 4
+    assert values["total_creators"] == 3
+    assert values["new_creators"] == 1
     assert values["new_users"] == 2
     assert values["active_users"] == 3
+    assert values["active_creators"] == 1
+    assert values["daily_active_users"] == 2
+    assert values["weekly_active_users"] == 3
+    assert values["monthly_active_users"] == 4
     assert values["total_views"] == 10
     assert values["unique_viewers"] == 3
     assert values["total_uploads"] == 3
@@ -124,6 +136,8 @@ async def test_overview_aggregates_events_and_handles_watch_metrics():
     assert values["average_watch_time"] == 3.0
     assert values["completion_rate"] == 50.0
     assert values["engagement_rate"] == 50.0
+    assert values["approved_content"] == 6
+    assert values["comparison"]["views_growth_pct"] == 100.0
 
 
 @pytest.mark.asyncio
@@ -140,7 +154,12 @@ async def test_overview_zero_views_returns_safe_rates():
             return self.rows
 
     db = AsyncMock()
-    db.execute.side_effect = [Result(0), Result(0), Result(0), Result(rows=[])]
+    db.execute.side_effect = [
+        Result(0), Result(0), Result(0), Result(0), Result(0),
+        Result(0), Result(0), Result(0), Result(0),
+        Result(rows=[]), Result(rows=[]), Result(0), Result(0),
+        Result(rows=[]), Result(0),
+    ]
     values = await PlatformAnalyticsService(db).overview(period().start, period().end)
 
     assert values["engagement_rate"] == 0.0

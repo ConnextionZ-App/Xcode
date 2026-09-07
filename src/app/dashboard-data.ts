@@ -32,27 +32,25 @@ export interface Metric {
 }
 
 export interface CollabStats {
-  totalRequests: number;
-  pending: number;
-  accepted: number;
-  completed: number;
-  active: number;
-  successRatePct: number;
-  avgResponseHours: number;
-  collabScore: number;
-  repeatCollaborators: number;
-  freelanceOpportunities: number;
-  jobOffers: number;
-  brandInvitations: number;
-  adOpportunities: number;
+  totalRequests: number | null;
+  pending: number | null;
+  accepted: number | null;
+  completed: number | null;
+  active: number | null;
+  successRatePct: number | null;
+  avgResponseHours: number | null;
+  collabScore: number | null;
+  repeatCollaborators: number | null;
+  freelanceOpportunities: number | null;
+  jobOffers: number | null;
+  brandInvitations: number | null;
+  adOpportunities: number | null;
 }
 
 /** A row in the content-management list. */
 export interface ContentRow extends ContentItem {
   comments: number;
   shares: number;
-  /** Present only for posts the viewer uploaded in this prototype. */
-  own?: OwnPost;
   createdAt?: number;
 }
 
@@ -87,10 +85,20 @@ export interface CreatorAnalyticsResponse {
     totalViews: number; uniqueViewers: number; totalLikes: number; totalComments: number;
     totalShares: number; totalSaves: number; followerGrowth: number; newFollowers: number;
     lostFollowers: number; avgWatchTime: number | null; completionRate: number | null;
-    engagementRate: number; totalPosts: number;
+    engagementRate: number; totalPosts: number; activeCollaborations: number; completedCollaborations: number;
   };
-  creatorVideoAnalytics: { post: ContentItem; views: number; likes: number; comments: number; shares: number; saves: number }[];
-  creatorAnalyticsTrends: { date: string; views: number; likes: number; comments: number; shares: number; saves: number; followersGained: number }[];
+  creatorVideoAnalytics: {
+    post: {
+      id: string; caption: string | null; viewCount: number; likeCount: number;
+      commentCount: number; shareCount: number; status: string; scheduledAt: string | null;
+      createdAt: string; media: { thumbnailUrl: string | null; url: string }[];
+    };
+    views: number; likes: number; comments: number; shares: number; saves: number;
+  }[];
+  creatorAnalyticsTrends: {
+    date: string; views: number; likes: number; comments: number; shares: number;
+    saves: number; followersGained: number;
+  }[];
 }
 
 export async function fetchCreatorAnalytics(range: Range): Promise<Result<CreatorAnalyticsResponse>> {
@@ -99,9 +107,10 @@ export async function fetchCreatorAnalytics(range: Range): Promise<Result<Creato
       creatorAnalytics(period: $period) {
         totalPosts totalViews uniqueViewers totalLikes totalComments totalShares totalSaves
         followerGrowth newFollowers lostFollowers avgWatchTime completionRate engagementRate
+        activeCollaborations completedCollaborations
       }
       creatorVideoAnalytics(period: $period, sortBy: "views") {
-        post { id thumbnail caption views likes status scheduledAt collabWith }
+        post { id caption viewCount likeCount commentCount shareCount status scheduledAt createdAt media { thumbnailUrl url } }
         views likes comments shares saves
       }
       creatorAnalyticsTrends(period: $period) { date views likes comments shares saves followersGained }
@@ -122,19 +131,38 @@ export async function fetchDashboard(range: Range): Promise<Result<DashboardData
   if (!result.ok) return result;
 
   const summary = result.value.creatorAnalytics;
-  const trends = result.value.creatorAnalyticsTrends;
+  const end = new Date();
+  const start = new Date(end.getTime() - (days - 1) * 86_400_000);
+  const trendsByDate = new Map(result.value.creatorAnalyticsTrends.map((point) => [point.date.slice(0, 10), point]));
+  const dates = Array.from({ length: days }, (_, index) => {
+    const date = new Date(start.getTime() + index * 86_400_000);
+    return date.toISOString().slice(0, 10);
+  });
   const seriesFor = (key: "views" | "likes" | "comments" | "shares" | "followers") =>
-    trends.map((point) => key === "followers" ? point.followersGained : point[key]);
+    dates.map((date) => {
+      const point = trendsByDate.get(date);
+      return point ? (key === "followers" ? point.followersGained : point[key]) : 0;
+    });
   const metric = (key: MetricKey, value: number): Metric => ({
     key, label: METRIC_LABELS[key], value, deltaPct: 0, series: seriesFor(key),
   });
   const content = result.value.creatorVideoAnalytics.map((row) => ({
-    ...row.post, views: row.views, likes: row.likes, comments: row.comments, shares: row.shares,
+    id: row.post.id,
+    thumbnail: row.post.media[0]?.thumbnailUrl ?? row.post.media[0]?.url ?? "",
+    caption: row.post.caption ?? "",
+    views: row.views,
+    likes: row.likes,
+    comments: row.comments,
+    shares: row.shares,
+    status: row.post.status.toLowerCase() as ContentItem["status"],
+    scheduledAt: row.post.scheduledAt ?? undefined,
+    createdAt: Date.parse(row.post.createdAt),
   } as ContentRow));
   const collab: CollabStats = {
-    totalRequests: 0, pending: 0, accepted: 0, completed: 0, active: 0, successRatePct: 0,
-    avgResponseHours: 0, collabScore: 0, repeatCollaborators: 0, freelanceOpportunities: 0,
-    jobOffers: 0, brandInvitations: 0, adOpportunities: 0,
+    totalRequests: null, pending: null, accepted: null,
+    completed: summary.completedCollaborations, active: summary.activeCollaborations,
+    successRatePct: null, avgResponseHours: null, collabScore: null, repeatCollaborators: null,
+    freelanceOpportunities: null, jobOffers: null, brandInvitations: null, adOpportunities: null,
   };
   return {
     ok: true,

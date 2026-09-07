@@ -861,7 +861,10 @@ class PlatformAnalyticsType:
     period_end: DateTimeScalar
     total_users: int = 0
     new_users: int = 0
+    total_creators: int = 0
+    new_creators: int = 0
     active_users: int = 0
+    active_creators: int = 0
     daily_active_users: Optional[int] = None
     weekly_active_users: Optional[int] = None
     monthly_active_users: Optional[int] = None
@@ -891,6 +894,19 @@ class PlatformAnalyticsType:
     notifications_generated: Optional[int] = None
     notifications_opened: int = 0
     notification_open_rate: Optional[float] = None
+    approved_content: int = 0
+    flagged_content: int = 0
+    removed_content: int = 0
+    comparison: "PlatformAnalyticsComparisonType | None" = None
+
+@strawberry.type
+class PlatformAnalyticsComparisonType:
+    user_growth_pct: Optional[float] = None
+    creator_growth_pct: Optional[float] = None
+    content_growth_pct: Optional[float] = None
+    views_growth_pct: Optional[float] = None
+    engagement_growth_pct: Optional[float] = None
+    active_users_growth_pct: Optional[float] = None
 
 @strawberry.type
 class PlatformAnalyticsTrendType:

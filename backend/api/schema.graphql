@@ -570,7 +570,10 @@ type PlatformAnalytics {
   periodEnd: DateTime!
   totalUsers: Int!
   newUsers: Int!
+  totalCreators: Int!
+  newCreators: Int!
   activeUsers: Int!
+  activeCreators: Int!
   dailyActiveUsers: Int
   weeklyActiveUsers: Int
   monthlyActiveUsers: Int
@@ -600,6 +603,19 @@ type PlatformAnalytics {
   notificationsGenerated: Int
   notificationsOpened: Int!
   notificationOpenRate: Float
+  approvedContent: Int!
+  flaggedContent: Int!
+  removedContent: Int!
+  comparison: PlatformAnalyticsComparison
+}
+
+type PlatformAnalyticsComparison {
+  userGrowthPct: Float
+  creatorGrowthPct: Float
+  contentGrowthPct: Float
+  viewsGrowthPct: Float
+  engagementGrowthPct: Float
+  activeUsersGrowthPct: Float
 }
 
 type PlatformAnalyticsTrend {

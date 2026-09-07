@@ -8,7 +8,7 @@ leave the database layer.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import case, distinct, func, select
@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analytics import AnalyticsEvent, EventType
 from app.models.content import ContentStatus, Post
-from app.models.user import User
+from app.models.user import User, UserRole
 
 
 ENGAGEMENT_EVENTS = (
@@ -60,6 +60,39 @@ class PlatformAnalyticsService:
             for row in result.all()
         }
 
+    async def _active_users_between(self, start: datetime, end: datetime) -> int:
+        result = await self.db.execute(
+            self._period(
+                select(func.count(distinct(AnalyticsEvent.user_id))).where(
+                    AnalyticsEvent.user_id.is_not(None)
+                ),
+                start,
+                end,
+            )
+        )
+        return int(result.scalar_one() or 0)
+
+    async def _active_creators_between(self, start: datetime, end: datetime) -> int:
+        result = await self.db.execute(
+            self._period(
+                select(func.count(distinct(AnalyticsEvent.user_id)))
+                .join(User, User.id == AnalyticsEvent.user_id)
+                .where(
+                    AnalyticsEvent.user_id.is_not(None),
+                    User.role == UserRole.CREATOR,
+                ),
+                start,
+                end,
+            )
+        )
+        return int(result.scalar_one() or 0)
+
+    @staticmethod
+    def _growth_pct(current: int | float, previous: int | float) -> float | None:
+        if previous == 0:
+            return None if current == 0 else 100.0
+        return (current - previous) / previous * 100
+
     async def overview(self, start: datetime, end: datetime) -> dict:
         if start > end:
             raise ValueError("Analytics period start must be before its end")
@@ -72,16 +105,39 @@ class PlatformAnalyticsService:
                 User.deleted_at.is_(None), User.created_at >= start, User.created_at <= end
             )
         )
-        active_result = await self.db.execute(
-            self._period(
-                select(func.count(distinct(AnalyticsEvent.user_id))).where(
-                    AnalyticsEvent.user_id.is_not(None)
-                ),
-                start,
-                end,
+        total_creators_result = await self.db.execute(
+            select(func.count()).select_from(User).where(
+                User.deleted_at.is_(None), User.role == UserRole.CREATOR
             )
         )
+        new_creators_result = await self.db.execute(
+            select(func.count()).select_from(User).where(
+                User.deleted_at.is_(None), User.role == UserRole.CREATOR,
+                User.created_at >= start, User.created_at <= end,
+            )
+        )
+        active_users = await self._active_users_between(start, end)
+        active_creators = await self._active_creators_between(start, end)
+        daily_active_users = await self._active_users_between(end - timedelta(days=1), end)
+        weekly_active_users = await self._active_users_between(end - timedelta(days=7), end)
+        monthly_active_users = await self._active_users_between(end - timedelta(days=30), end)
         events = await self._event_totals(start, end)
+
+        previous_start = start - (end - start)
+        previous_end = start
+        previous_events = await self._event_totals(previous_start, previous_end)
+        previous_new_users_result = await self.db.execute(
+            select(func.count()).select_from(User).where(
+                User.deleted_at.is_(None), User.created_at >= previous_start, User.created_at <= previous_end
+            )
+        )
+        previous_new_creators_result = await self.db.execute(
+            select(func.count()).select_from(User).where(
+                User.deleted_at.is_(None), User.role == UserRole.CREATOR,
+                User.created_at >= previous_start, User.created_at <= previous_end,
+            )
+        )
+        previous_active_users = await self._active_users_between(previous_start, previous_end)
 
         def count(event_type: EventType) -> int:
             return events.get(event_type, {}).get("count", 0)
@@ -96,14 +152,33 @@ class PlatformAnalyticsService:
         watch_ms = events.get(EventType.VIDEO_WATCHED, {}).get("duration_ms", 0)
         completions = count(EventType.VIDEO_COMPLETED)
         published = count(EventType.VIDEO_PUBLISHED)
+        previous_count = lambda event_type: previous_events.get(event_type, {}).get("count", 0)
+        previous_views = previous_count(EventType.VIDEO_VIEWED)
+        previous_engagements = sum(previous_count(event) for event in ENGAGEMENT_EVENTS)
+
+        moderation_result = await self.db.execute(
+            select(Post.moderation_status, func.count().label("count"))
+            .where(Post.deleted_at.is_(None))
+            .group_by(Post.moderation_status)
+        )
+        moderation_counts = {row.moderation_status: int(row.count or 0) for row in moderation_result.all()}
+        total_users = int(total_users_result.scalar_one() or 0)
+        new_users = int(new_users_result.scalar_one() or 0)
+        total_creators = int(total_creators_result.scalar_one() or 0)
+        new_creators = int(new_creators_result.scalar_one() or 0)
+        previous_new_users = int(previous_new_users_result.scalar_one() or 0)
+        previous_new_creators = int(previous_new_creators_result.scalar_one() or 0)
 
         return {
-            "total_users": int(total_users_result.scalar_one() or 0),
-            "new_users": int(new_users_result.scalar_one() or 0),
-            "active_users": int(active_result.scalar_one() or 0),
-            "daily_active_users": None,
-            "weekly_active_users": None,
-            "monthly_active_users": None,
+            "total_users": total_users,
+            "new_users": new_users,
+            "total_creators": total_creators,
+            "new_creators": new_creators,
+            "active_users": active_users,
+            "active_creators": active_creators,
+            "daily_active_users": daily_active_users,
+            "weekly_active_users": weekly_active_users,
+            "monthly_active_users": monthly_active_users,
             "total_uploads": count(EventType.VIDEO_UPLOADED),
             "total_published_videos": published,
             "total_views": views,
@@ -130,6 +205,17 @@ class PlatformAnalyticsService:
             "notifications_opened": count(EventType.NOTIFICATION_OPENED),
             "notifications_generated": None,
             "notification_open_rate": None,
+            "approved_content": moderation_counts.get("approved", 0),
+            "flagged_content": moderation_counts.get("flagged", 0),
+            "removed_content": moderation_counts.get("removed", 0),
+            "comparison": {
+                "user_growth_pct": self._growth_pct(new_users, previous_new_users),
+                "creator_growth_pct": self._growth_pct(new_creators, previous_new_creators),
+                "content_growth_pct": self._growth_pct(count(EventType.VIDEO_PUBLISHED), previous_count(EventType.VIDEO_PUBLISHED)),
+                "views_growth_pct": self._growth_pct(views, previous_views),
+                "engagement_growth_pct": self._growth_pct(engagements, previous_engagements),
+                "active_users_growth_pct": self._growth_pct(active_users, previous_active_users),
+            },
         }
 
     async def daily_trends(self, start: datetime, end: datetime) -> list[dict]:
