@@ -90,6 +90,110 @@ class AnalyticsRepository(BaseRepository[InteractionSignal]):
             for row in result.all()
         }
 
+    async def per_post_signal_totals(
+        self,
+        *,
+        creator_id: uuid.UUID | None = None,
+        post_ids: list[uuid.UUID] | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> dict[uuid.UUID, dict[SignalType, dict[str, float]]]:
+        """Per-post and per-signal-type totals in a single grouped query."""
+        stmt = (
+            select(
+                InteractionSignal.post_id,
+                InteractionSignal.signal_type,
+                func.count().label("cnt"),
+                func.sum(InteractionSignal.value).label("total"),
+            )
+            .where(InteractionSignal.post_id.is_not(None))
+            .group_by(InteractionSignal.post_id, InteractionSignal.signal_type)
+        )
+        if creator_id is not None:
+            stmt = stmt.where(InteractionSignal.creator_id == creator_id)
+        if post_ids:
+            stmt = stmt.where(InteractionSignal.post_id.in_(post_ids))
+        if start is not None:
+            stmt = stmt.where(InteractionSignal.created_at >= start)
+        if end is not None:
+            stmt = stmt.where(InteractionSignal.created_at <= end)
+
+        result = await self.db.execute(stmt)
+        totals: dict[uuid.UUID, dict[SignalType, dict[str, float]]] = {}
+        for row in result.all():
+            p_id = row.post_id
+            if p_id not in totals:
+                totals[p_id] = {}
+            totals[p_id][row.signal_type] = {
+                "count": row.cnt,
+                "total": float(row.total or 0.0),
+            }
+        return totals
+
+    async def daily_signal_totals(
+        self,
+        *,
+        creator_id: uuid.UUID | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[dict]:
+        """Daily aggregated activity points grouped by UTC date."""
+        day = func.date(InteractionSignal.created_at).label("day")
+        stmt = (
+            select(
+                day,
+                InteractionSignal.signal_type,
+                func.count().label("cnt"),
+                func.sum(InteractionSignal.value).label("total"),
+            )
+            .group_by(day, InteractionSignal.signal_type)
+            .order_by(day.asc())
+        )
+        if creator_id is not None:
+            stmt = stmt.where(InteractionSignal.creator_id == creator_id)
+        if start is not None:
+            stmt = stmt.where(InteractionSignal.created_at >= start)
+        if end is not None:
+            stmt = stmt.where(InteractionSignal.created_at <= end)
+
+        result = await self.db.execute(stmt)
+        by_date: dict[str, dict] = {}
+        for row in result.all():
+            date_str = str(row.day)
+            if date_str not in by_date:
+                by_date[date_str] = {
+                    "views": 0,
+                    "likes": 0,
+                    "comments": 0,
+                    "shares": 0,
+                    "saves": 0,
+                    "followers_gained": 0,
+                    "followers_lost": 0,
+                }
+            st = row.signal_type
+            cnt = int(row.cnt or 0)
+            if st in (SignalType.VIEW, SignalType.REWATCH):
+                by_date[date_str]["views"] += cnt
+            elif st == SignalType.LIKE:
+                by_date[date_str]["likes"] += cnt
+            elif st == SignalType.UNLIKE:
+                by_date[date_str]["likes"] = max(0, by_date[date_str]["likes"] - cnt)
+            elif st == SignalType.SAVE:
+                by_date[date_str]["saves"] += cnt
+            elif st == SignalType.UNSAVE:
+                by_date[date_str]["saves"] = max(0, by_date[date_str]["saves"] - cnt)
+            elif st == SignalType.SHARE:
+                by_date[date_str]["shares"] += cnt
+            elif st == SignalType.FOLLOW:
+                by_date[date_str]["followers_gained"] += cnt
+            elif st == SignalType.UNFOLLOW:
+                by_date[date_str]["followers_lost"] += cnt
+
+        return [
+            {"date": d, **v, "net_followers": v["followers_gained"] - v["followers_lost"]}
+            for d, v in sorted(by_date.items())
+        ]
+
     async def creator_affinity(self, user_id: uuid.UUID, limit: int = 20) -> list[tuple[uuid.UUID, float]]:
         """Creators this user engages with most, weighted by signal value."""
         result = await self.db.execute(

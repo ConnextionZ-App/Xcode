@@ -22,8 +22,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from api.graphql import AppContext, _creator_analytics, _post_analytics
+from api.graphql import AppContext, _creator_analytics, _creator_video_analytics, _post_analytics
 from app.models.analytics import SignalType
+from services.creator_analytics_service import CreatorAnalyticsService
 
 
 def make_ctx(user_id: uuid.UUID | None = None) -> AppContext:
@@ -166,6 +167,120 @@ class TestCreatorAnalytics:
         assert result.total_views == 0
         assert result.engagement_rate == 0.0
         assert result.top_posts == []
+
+    @pytest.mark.asyncio
+    async def test_net_follower_growth_and_unfollows(self, monkeypatch):
+        ctx = make_ctx()
+        start = datetime(2026, 2, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 2, 28, tzinfo=timezone.utc)
+
+        async def fake_get_by_user_id(self, user_id, limit=500):
+            return []
+
+        signals = {
+            SignalType.VIEW: {"count": 10, "total": 10.0},
+            SignalType.FOLLOW: {"count": 15, "total": 15.0},
+            SignalType.UNFOLLOW: {"count": 3, "total": 3.0},
+            SignalType.SAVE: {"count": 2, "total": 2.0},
+            SignalType.UNSAVE: {"count": 1, "total": 1.0},
+            SignalType.LIKE: {"count": 5, "total": 5.0},
+            SignalType.UNLIKE: {"count": 1, "total": 1.0},
+        }
+
+        async def fake_signal_totals(self, *, creator_id=None, post_id=None, start=None, end=None):
+            return signals
+
+        async def fake_count_for_creator(self, creator_id, start=None, end=None):
+            return 1
+
+        async def fake_count_followers_since(self, user_id, start=None, end=None):
+            return 15
+
+        monkeypatch.setattr("repositories.content_repository.PostRepository.get_by_user_id", fake_get_by_user_id)
+        monkeypatch.setattr("repositories.analytics_repository.AnalyticsRepository.signal_totals", fake_signal_totals)
+        monkeypatch.setattr("repositories.content_repository.CommentRepository.count_for_creator", fake_count_for_creator)
+        monkeypatch.setattr("repositories.social_repository.FollowRepository.count_followers_since", fake_count_followers_since)
+
+        period = SimpleNamespace(start=start, end=end)
+        result = await _creator_analytics(ctx, period)
+
+        assert result.new_followers == 15
+        assert result.lost_followers == 3
+        assert result.follower_growth == 12
+        assert result.total_likes == 4
+        assert result.total_saves == 1
+
+    @pytest.mark.asyncio
+    async def test_creator_video_analytics_authorization(self):
+        ctx = AppContext(db=AsyncMock(), current_user=None)
+        period = SimpleNamespace(start=datetime.now(timezone.utc), end=datetime.now(timezone.utc))
+        with pytest.raises(PermissionError):
+            await _creator_video_analytics(ctx, period, "views")
+
+    @pytest.mark.asyncio
+    async def test_creator_analytics_service_overview_and_per_post(self, monkeypatch):
+        creator_id = uuid.uuid4()
+        post1 = make_post(creator_id, like_count=10, view_count=50)
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 1, 31, tzinfo=timezone.utc)
+
+        db = AsyncMock()
+        service = CreatorAnalyticsService(db)
+
+        async def fake_posts(c_id):
+            return [post1]
+
+        signals = {
+            SignalType.VIEW: {"count": 20, "total": 20.0},
+            SignalType.REWATCH: {"count": 5, "total": 5.0},
+            SignalType.WATCH_DURATION: {"count": 25, "total": 500.0},
+            SignalType.COMPLETION: {"count": 10, "total": 10.0},
+            SignalType.LIKE: {"count": 8, "total": 8.0},
+            SignalType.SHARE: {"count": 2, "total": 2.0},
+            SignalType.SAVE: {"count": 3, "total": 3.0},
+            SignalType.FOLLOW: {"count": 5, "total": 5.0},
+            SignalType.UNFOLLOW: {"count": 1, "total": 1.0},
+        }
+
+        async def fake_signal_totals(*args, **kwargs):
+            return signals
+
+        per_post = {
+            post1.id: {
+                SignalType.VIEW: {"count": 20, "total": 20.0},
+                SignalType.REWATCH: {"count": 5, "total": 5.0},
+                SignalType.WATCH_DURATION: {"count": 25, "total": 500.0},
+                SignalType.COMPLETION: {"count": 10, "total": 10.0},
+                SignalType.LIKE: {"count": 8, "total": 8.0},
+                SignalType.SHARE: {"count": 2, "total": 2.0},
+                SignalType.SAVE: {"count": 3, "total": 3.0},
+            }
+        }
+
+        async def fake_per_post(*args, **kwargs):
+            return per_post
+
+        async def fake_count_for_creator(*args, **kwargs):
+            return 0
+
+        monkeypatch.setattr(service, "_posts", fake_posts)
+        monkeypatch.setattr(service.analytics_repo, "signal_totals", fake_signal_totals)
+        monkeypatch.setattr(service.analytics_repo, "per_post_signal_totals", fake_per_post)
+        monkeypatch.setattr("repositories.content_repository.CommentRepository.count_for_creator", fake_count_for_creator)
+
+        overview = await service.overview(creator_id, start, end)
+
+        assert overview["total_posts"] == 1
+        assert overview["total_views"] == 25
+        assert overview["total_likes"] == 8
+        assert overview["total_shares"] == 2
+        assert overview["total_saves"] == 3
+        assert overview["new_followers"] == 5
+        assert overview["lost_followers"] == 1
+        assert overview["follower_growth"] == 4
+        assert overview["avg_watch_time"] == pytest.approx(500.0 / 25)
+        assert overview["completion_rate"] == pytest.approx(10 / 25 * 100)
+        assert len(overview["top_posts"]) == 1
 
 
 class TestPostAnalytics:

@@ -3420,13 +3420,29 @@ async def _platform_top_content(ctx, period, sort_by: str) -> List[PlatformConte
 
 async def _creator_analytics(ctx, period) -> AnalyticsSummaryType:
     """Return event-backed analytics, retaining the legacy adapter for old data fixtures."""
+    user = ctx.require_auth()
     if hasattr(ctx.db, "execute") and hasattr(ctx.db.execute, "assert_awaited"):
         return await _legacy_creator_analytics(ctx, period)
     from services.creator_analytics_service import CreatorAnalyticsService
 
     values = await CreatorAnalyticsService(ctx.db).overview(
-        ctx.require_auth().id, period.start, period.end
+        user.id, period.start, period.end
     )
+    top_post_types = [
+        PostAnalyticsType(
+            post=_post_to_gql(item["post"]),
+            views=item["views"],
+            likes=item["likes"],
+            comments=item["comments"],
+            shares=item["shares"],
+            saves=item["saves"],
+            avg_watch_time=item["avg_watch_time"],
+            completion_rate=item["completion_rate"],
+            engagement_rate=item["engagement_rate"],
+        )
+        for item in values.get("top_posts", [])
+        if item.get("post") is not None
+    ]
     return AnalyticsSummaryType(
         period_start=period.start,
         period_end=period.end,
@@ -3445,7 +3461,7 @@ async def _creator_analytics(ctx, period) -> AnalyticsSummaryType:
         avg_watch_time=values["avg_watch_time"],
         completion_rate=values["completion_rate"],
         engagement_rate=values["engagement_rate"],
-        top_posts=[],
+        top_posts=top_post_types,
     )
 
 
@@ -3509,7 +3525,14 @@ async def _legacy_creator_analytics(ctx, period) -> AnalyticsSummaryType:
 
     total_views = signal_count(SignalType.VIEW, SignalType.REWATCH)
     total_shares = signal_count(SignalType.SHARE)
-    total_likes = signal_count(SignalType.LIKE)
+    total_likes = max(0, signal_count(SignalType.LIKE) - signal_count(SignalType.UNLIKE))
+    total_saves = max(0, signal_count(SignalType.SAVE) - signal_count(SignalType.UNSAVE))
+    completions = signal_count(SignalType.COMPLETION)
+    watch_duration = signals.get(SignalType.WATCH_DURATION, {})
+    total_watch_time = float(watch_duration.get("total", 0.0))
+
+    avg_watch_time = total_watch_time / total_views if total_views > 0 else None
+    completion_rate = (completions / total_views * 100) if total_views > 0 else None
 
     total_comments = await CommentRepository(ctx.db).count_for_creator(
         user.id, start=start, end=end
@@ -3517,21 +3540,24 @@ async def _legacy_creator_analytics(ctx, period) -> AnalyticsSummaryType:
 
     follow_repo = FollowRepository(ctx.db)
     new_followers = await follow_repo.count_followers_since(user.id, start=start, end=end)
+    lost_followers = signal_count(SignalType.UNFOLLOW)
+    follower_growth = new_followers - lost_followers
 
     engagement_rate = 0.0
     if total_views > 0:
-        engagement_rate = (total_likes + total_comments + total_shares) / total_views * 100
+        engagement_rate = (total_likes + total_comments + total_shares + total_saves) / total_views * 100
 
     top_posts = sorted(
-        posts, key=lambda p: p.like_count + p.comment_count + p.share_count, reverse=True
+        posts, key=lambda p: getattr(p, "like_count", 0) + getattr(p, "comment_count", 0) + getattr(p, "share_count", 0) + getattr(p, "save_count", 0), reverse=True
     )[:5]
     top_post_types = [
         PostAnalyticsType(
             post=_post_to_gql(p),
-            views=p.view_count,
-            likes=p.like_count,
-            comments=p.comment_count,
-            shares=p.share_count,
+            views=getattr(p, "view_count", 0),
+            likes=getattr(p, "like_count", 0),
+            comments=getattr(p, "comment_count", 0),
+            shares=getattr(p, "share_count", 0),
+            saves=getattr(p, "save_count", 0),
         )
         for p in top_posts
     ]
@@ -3544,9 +3570,12 @@ async def _legacy_creator_analytics(ctx, period) -> AnalyticsSummaryType:
         total_likes=total_likes,
         total_comments=total_comments,
         total_shares=total_shares,
-        follower_growth=new_followers,
+        total_saves=total_saves,
+        avg_watch_time=avg_watch_time,
+        completion_rate=completion_rate,
+        follower_growth=follower_growth,
         new_followers=new_followers,
-        lost_followers=0,
+        lost_followers=lost_followers,
         engagement_rate=engagement_rate,
         top_posts=top_post_types,
     )
